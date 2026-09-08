@@ -3,6 +3,7 @@
 // berarti user mengulang persetujuan. "Allow once" tidak disimpan.
 import * as readline from "node:readline";
 import type { PermissionDecision, RiskLevel } from "../tools/types.js";
+import { isSafeShellCommand } from "../tools/shellPolicy.js";
 
 export interface ApprovalState {
   allowAll: string[];
@@ -69,6 +70,8 @@ export class PermissionEngine {
     signal?: AbortSignal,
   ): Promise<PermissionDecision> {
     if (risk === "safe") return "allow";
+    // Shell read-only (ls, cd, cat, ...) bebas izin; sisanya tetap ditanya.
+    if (tool === "shell" && command && isSafeShellCommand(command)) return "allow";
     const { key, base } = permissionKey(tool, args, command);
     if (this.allowAll.has(key) || this.allowAll.has("*") || this.allowAll.has("shell:*")) return "allow";
     if (this.denied.has(key)) return "deny";

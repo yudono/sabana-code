@@ -55,8 +55,12 @@ describe("viewport itemRows", () => {
     assert.ok(itemRows(cut, 80) <= 10);
   });
 
-  it("sliceItemTail: abaikan kind user/tool", () => {
-    const u: ChatItem = { kind: "user", text: "x".repeat(500) };
-    assert.deepEqual(sliceItemTail(u, 5, 80), u);
+  it("sliceItemTail: abaikan kind tool, potong user raksasa", () => {
+    const t: ChatItem = { kind: "tool", id: "1", summary: "x".repeat(500), status: "ok" };
+    assert.deepEqual(sliceItemTail(t, 5, 80), t);
+    const u: ChatItem = { kind: "user", text: Array.from({ length: 50 }, (_, i) => `b-${i}`).join("\n") };
+    const cut = sliceItemTail(u, 10, 80);
+    assert.ok(cut.text.includes("b-49"));
+    assert.ok(itemRows(cut, 80) <= 10);
   });
 });

@@ -101,6 +101,7 @@ Perintah dalam TUI:
 | `/tools`, `/clear`, `/quit` | daftar tools, bersihkan layar, keluar |
 
 `Ctrl+C` membatalkan turn yang berjalan; `Ctrl+C` lagi untuk keluar (sesi otomatis tersimpan).
+`↑`/`↓` scroll riwayat chat (3 baris), `PgUp`/`PgDn` satu layar; kirim pesan baru untuk kembali ke bawah.
 
 ### Multi-provider & multi-model
 
@@ -166,16 +167,18 @@ di-override per-perintah, mis. `SABANA_MODEL=gpt-4o sabana-code-tui`.
   error 429/kuota/5xx/timeout di-retry otomatis dengan backoff eksponensial.
 - **Sandbox path**: tool filesystem hanya boleh mengakses workspace (`safePath`);
   perintah `shell` yang menggantung loop (dev server, `sleep`, background `&`) diblokir.
-- Izin tool: setiap tool berisiko (tulis/edit file, `shell`) meminta persetujuan
-  inline — `[y]` sekali, `[a]` semua yang serupa, `[n]` tolak. Keputusan
-  `allow all`/`deny` (mis. semua perintah `npm`) tersimpan di file session
+- Izin tool: file (baca/tulis/edit/list) dan shell read-only (`ls`, `cd`,
+  `cat`, `echo`, …) bebas izin. Hanya eksekusi berpotensi berbahaya (`rm`,
+  `mkdir`, `npm`, `git`, …) yang meminta persetujuan inline — `[y]` sekali,
+  `[a]` semua perintah serupa (satu entity, mis. semua `npm …`), `[n]` tolak.
+  Keputusan `allow all`/`deny` tersimpan di file session
   (`~/sabana-code/sessions/<uuid>.json`), jadi berlaku selama session itu saja;
   session baru mengulang persetujuan dari nol.
 
 ## Untuk developer
 
 ```bash
-npm test          # 101 unit test (node:test, tanpa framework tambahan)
+npm test          # 139 unit test (node:test, tanpa framework tambahan)
 npm run benchmark # benchmark ala SWE-bench/Terminal-Bench, mock deterministik
 npm run typecheck # tsc --noEmit
 ```

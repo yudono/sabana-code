@@ -76,9 +76,9 @@ export const writeFileTool: ToolDefinition = {
     },
     required: ["path", "content"],
   },
-  permissions: { requiresPermission: true },
+  permissions: { requiresPermission: false },
   timeout: 15_000,
-  riskLevel: "moderate",
+  riskLevel: "safe",
 };
 
 export function writeFileHandler(workspaceDir: string) {
@@ -106,9 +106,9 @@ export const editFileTool: ToolDefinition = {
     },
     required: ["path", "search", "replace"],
   },
-  permissions: { requiresPermission: true },
+  permissions: { requiresPermission: false },
   timeout: 10_000,
-  riskLevel: "moderate",
+  riskLevel: "safe",
 };
 
 export function editFileHandler(workspaceDir: string) {

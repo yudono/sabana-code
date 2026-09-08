@@ -44,6 +44,9 @@ export interface TuiOptions {
 
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+// Langkah scroll chat per tekan tombol panah (baris).
+const SCROLL_STEP = 3;
+
 function truncate(s: string, n = 400): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
@@ -97,12 +100,49 @@ export function itemRows(it: ChatItem, cols: number): number {
 }
 
 /**
+ * Hitung jendela item yang muat di layar.
+ * @param heights tinggi tiap item (searah feed, lama → baru)
+ * @param avail baris tersedia untuk chat
+ * @param scroll baris yang disembunyikan dari bawah (0 = menempel ekor)
+ * @returns start/end (end eksklusif) + scroll yang sudah dijepit
+ *
+ * scroll 0 → ekor selalu terlihat. Menaikkan scroll menggeser jendela ke atas.
+ * Item yang hanya muat sebagian TIDAK dirender (mencegah overlap).
+ */
+export function computeWindow(
+  heights: number[],
+  avail: number,
+  scroll: number,
+): { start: number; end: number; scroll: number; total: number } {
+  const total = heights.reduce((a, b) => a + b, 0);
+  const s = Math.min(Math.max(0, Math.floor(scroll)), Math.max(0, total - avail));
+  // Lewati `s` baris dari bawah (item utuh saja). Item yang hanya muat
+  // sebagian di bawah ikut dibuang — kalau dirender ia overflow menabrak
+  // input box (sumber layar "nabrak").
+  let end = heights.length;
+  let skipped = 0;
+  while (end > 0 && skipped + heights[end - 1] <= s) {
+    skipped += heights[end - 1];
+    end--;
+  }
+  if (end > 0 && skipped < s) end--;
+  // Ambil mundur maksimal `avail` baris (item utuh saja).
+  let start = end;
+  let used = 0;
+  while (start > 0 && used + heights[start - 1] <= avail) {
+    used += heights[start - 1];
+    start--;
+  }
+  return { start, end, scroll: s, total };
+}
+
+/**
  * Potong item raksasa (assistant/info): ambil ekornya saja agar muat maxRows.
  * Mencegah satu item mendorong seluruh layar (chat tak pernah kosong).
  * Untuk info: pertahankan HEADER (baris pertama) agar judul tidak hilang.
  */
 export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): ChatItem {
-  if (it.kind !== "assistant" && it.kind !== "info") return it;
+  if (it.kind !== "assistant" && it.kind !== "info" && it.kind !== "user") return it;
   const budget = Math.max(1, maxRows - 1); // sisakan 1 baris penanda
   const w = Math.max(20, cols - 4);
   const lines = it.text.split("\n");
@@ -209,6 +249,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   const [running, setRunning] = useState(false);
   const [stream, setStream] = useState("");
   const [cutoff, setCutoff] = useState(0);
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [spin, setSpin] = useState(0);
 
   const sessionRef = useRef(session);
@@ -429,17 +470,14 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
 
       switch (name) {
         case "help": {
-          const lines = helpText().split("\n");
-          // Reverse so important commands stay visible in viewport
-          for (const line of lines.reverse()) {
-            push({ kind: "info", tone: "dim", text: line });
-          }
+          push({ kind: "info", tone: "dim", text: helpText() });
           break;
         }
         case "new": {
           persist(createSession(sess.model, sess.provider, workspaceDir));
           agentRef.current = makeAgent(sessionRef.current, maxSteps, handleEvent, asker);
           setCutoff(itemsRef.current.length + 1);
+          setScrollOffset(0);
           push({ kind: "info", tone: "green", text: `Session baru: ${sessionRef.current.id.slice(0, 8)}` });
           break;
         }
@@ -564,6 +602,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           persist(target);
           agentRef.current = makeAgent(target, maxSteps, handleEvent, asker);
           setCutoff(itemsRef.current.length + 1);
+          setScrollOffset(0);
           push({ kind: "info", tone: "green", text: `Melanjutkan session ${target.id.slice(0, 8)} (${target.messages.length} pesan).` });
           for (const it of rebuildItems(target.messages)) push(it);
           break;
@@ -720,6 +759,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
         }
         case "clear":
           setCutoff(itemsRef.current.length);
+          setScrollOffset(0);
           break;
         case "quit":
         case "exit":
@@ -739,6 +779,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
       const text = value.trim();
       if (!text) return;
       setInput("");
+      setScrollOffset(0); // output baru → kembali menempel ekor
       const cmd = parseCommand(text);
       if (cmd) void execCommand(cmd.name, cmd.args);
       else void runTurn(text);
@@ -770,24 +811,34 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   const cols = Math.max(40, size.columns);
   const rows = Math.max(12, size.rows);
 
-  // Viewport manual arah normal: hanya item ekor yang muat yang dirender,
-  // item lama keluar dari atas. Tanpa column-reverse/overflow eksotis.
+  // Dropdown: tampilkan maksimal 8 opsi di sekitar pilihan (agar muat layar).
+  const DD_MAX = 8;
+  let ddVisible: string[] = [];
+  let ddOffset = 0;
+  if (dropdown) {
+    const n = dropdown.options.length;
+    ddOffset = n <= DD_MAX ? 0 : Math.min(Math.max(0, dropdown.selected - Math.floor(DD_MAX / 2)), n - DD_MAX);
+    ddVisible = dropdown.options.slice(ddOffset, ddOffset + DD_MAX);
+  }
+
+  // Viewport manual arah normal: scrollOffset 0 = ekor (terbaru) menempel bawah.
+  // Naikkan scrollOffset untuk melihat riwayat lama; dijepit agar tak kosong.
   const CHROME_ROWS = 4 + 1 + 3 + 1; // header + margin + input + status
   const approvalRows = approval ? 5 : 0;
-  const avail = Math.max(5, rows - CHROME_ROWS - approvalRows - 2);
+  const dropdownRows = dropdown ? 8 + ddVisible.length : 0;
+  const avail = Math.max(5, rows - CHROME_ROWS - approvalRows - dropdownRows - 2);
   const feed: ChatItem[] = stream ? [...visible, { kind: "assistant", text: `${stream}▍` }] : visible;
-  let start = feed.length;
-  let used = 0;
-  while (start > 0) {
-    const h = itemRows(feed[start - 1], cols);
-    if (used + h > avail) break;
-    used += h;
-    start--;
-  }
-  let windowed = feed.slice(start);
+  const heights = feed.map((it) => itemRows(it, cols));
+  const { start, end, scroll } = computeWindow(heights, avail, scrollOffset);
+  let windowed = feed.slice(start, end);
   // Satu item raksasa melebihi layar: tampilkan ekornya, jangan kosongkan chat.
   if (windowed.length === 1 && itemRows(windowed[0], cols) > avail) {
     windowed = [sliceItemTail(windowed[0], avail, cols)];
+  }
+  // Pengaman lapis kedua: feed tak kosong → jangan pernah tampil kosong.
+  if (windowed.length === 0 && feed.length > 0) {
+    const anchor = feed[Math.min(Math.max(end - 1, 0), feed.length - 1)];
+    windowed = [sliceItemTail(anchor, avail, cols)];
   }
 
   return (
@@ -827,18 +878,29 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
       </Box>
 
       {dropdown && (
-        <Box marginTop={1} marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} paddingY={1} width={Math.min(cols - 4, 60)}>
+        <Box marginTop={1} marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} paddingY={1} width={Math.min(cols - 4, 60)} flexDirection="column">
           <Box marginBottom={1}>
-            <Text bold color="cyan">{dropdown.type === "models" ? "Model" : "Provider"}</Text>
-            <Text dimColor>↑↓ pilih  Enter=pilih  Esc=batal</Text>
+            <Text>
+              <Text bold color="cyan">{dropdown.type === "models" ? "Model" : "Provider"}</Text>
+              <Text dimColor>  ↑↓ pilih · Enter=pilih · Esc=batal</Text>
+            </Text>
           </Box>
-          {dropdown.options.map((opt, idx) => (
-            <Box key={opt} marginTop={idx === 0 ? 0 : 1}>
-              <Text color={dropdown.selected === idx ? "cyan" : "white"} dimColor={dropdown.selected !== idx}>
-                {dropdown.selected === idx ? "► " : "  "}{opt}{dropdown.type === "models" && opt === session.model ? "  ← aktif" : dropdown.type === "providers" && opt === session.provider ? "  ← aktif" : ""}
-              </Text>
-            </Box>
-          ))}
+          {ddOffset > 0 && (
+            <Box><Text dimColor>  ↑ {ddOffset} lagi di atas…</Text></Box>
+          )}
+          {ddVisible.map((opt, vi) => {
+            const idx = ddOffset + vi;
+            return (
+              <Box key={`${idx}-${opt}`}>
+                <Text color={dropdown.selected === idx ? "cyan" : undefined} dimColor={dropdown.selected !== idx}>
+                  {dropdown.selected === idx ? "► " : "  "}{opt}{dropdown.type === "models" && opt === session.model ? "  ← aktif" : dropdown.type === "providers" && opt === session.provider ? "  ← aktif" : ""}
+                </Text>
+              </Box>
+            );
+          })}
+          {ddOffset + ddVisible.length < dropdown.options.length && (
+            <Box><Text dimColor>  ↓ {dropdown.options.length - ddOffset - ddVisible.length} lagi di bawah…</Text></Box>
+          )}
         </Box>
       )}
       <Box marginTop={1} borderStyle="single" borderColor={approval ? "yellow" : running ? "yellow" : "gray"} paddingX={1}>
@@ -872,6 +934,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
         <Text dimColor>
           ctx ~{usage.tokens.toLocaleString()}/{usage.window.toLocaleString()} ({usage.pct.toFixed(0)}%)
           {"  "}• {session.filesModified.length} files • /help
+          {scroll > 0 ? ` • ↑${scroll} (↓ ke bawah)` : ""}
         </Text>
       </Box>
 
@@ -900,6 +963,48 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           // Ignore other keys when dropdown is open
           return;
         }
+        if (approvalActive.current) {
+          // Scroll tetap boleh saat box izin tampil (y/a/n tidak bentrok).
+          if (key.upArrow) {
+            setScrollOffset((s) => s + SCROLL_STEP);
+            return;
+          }
+          if (key.downArrow) {
+            setScrollOffset((s) => Math.max(0, s - SCROLL_STEP));
+            return;
+          }
+          if (key.pageUp) {
+            setScrollOffset((s) => s + avail);
+            return;
+          }
+          if (key.pageDown) {
+            setScrollOffset((s) => Math.max(0, s - avail));
+            return;
+          }
+          if (key.escape) {
+            // Allow escape to exit even in approval mode
+          }
+        }
+        // Chat history scrolling (saat tidak ada dropdown/modal).
+        // ↑ = lihat riwayat lama, ↓ = kembali ke bawah.
+        if (!approvalActive.current && !dropdown) {
+          if (key.upArrow) {
+            setScrollOffset((s) => s + SCROLL_STEP);
+            return;
+          }
+          if (key.downArrow) {
+            setScrollOffset((s) => Math.max(0, s - SCROLL_STEP));
+            return;
+          }
+          if (key.pageUp) {
+            setScrollOffset((s) => s + avail);
+            return;
+          }
+          if (key.pageDown) {
+            setScrollOffset((s) => Math.max(0, s - avail));
+            return;
+          }
+        }
         if (key.ctrl && inp === "c") {
           // Batal juga menutup box izin (tanpa menyimpan keputusan).
           if (approvalActive.current) answerApproval("cancel");
@@ -925,7 +1030,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   );
 }
 
-function KeyHandler({ onKey }: { onKey: (inp: string, key: { ctrl?: boolean; escape?: boolean; upArrow?: boolean; downArrow?: boolean; return?: boolean; }) => void }): React.JSX.Element {
+function KeyHandler({ onKey }: { onKey: (inp: string, key: { ctrl?: boolean; escape?: boolean; upArrow?: boolean; downArrow?: boolean; return?: boolean; pageUp?: boolean; pageDown?: boolean }) => void }): React.JSX.Element {
   useInput((inp, key) => {
     onKey(inp, key);
   });

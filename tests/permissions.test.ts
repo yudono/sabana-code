@@ -65,4 +65,48 @@ describe("permission engine", () => {
     c.abort();
     assert.equal(await pending, "deny");
   });
+
+  it("shell aman (ls/cd) bebas izin tanpa bertanya", async () => {
+    let asked = 0;
+    const p = new PermissionEngine(false, {
+      asker: async () => {
+        asked++;
+        return "deny";
+      },
+    });
+    assert.equal(await p.check("shell", { command: "ls -la" }, "moderate", "ls -la"), "allow");
+    assert.equal(await p.check("shell", { command: "cd /tmp && ls" }, "moderate", "cd /tmp && ls"), "allow");
+    assert.equal(asked, 0);
+  });
+
+  it("shell berbahaya tetap bertanya (sekali per entity)", async () => {
+    const asked: string[] = [];
+    const p = new PermissionEngine(false, {
+      asker: async (req) => {
+        asked.push(req.command as string);
+        return "all";
+      },
+    });
+    assert.equal(await p.check("shell", { command: "npm install" }, "moderate", "npm install"), "allow");
+    // Satu entity npm → berikutnya lolos tanpa bertanya lagi
+    assert.equal(await p.check("shell", { command: "npm run build" }, "moderate", "npm run build"), "allow");
+    assert.equal(await p.check("shell", { command: "npm test" }, "moderate", "npm test"), "allow");
+    assert.deepEqual(asked, ["npm install"]);
+    // Entity lain tetap ditanya
+    assert.equal(await p.check("shell", { command: "rm -rf x" }, "moderate", "rm -rf x"), "allow");
+    assert.deepEqual(asked, ["npm install", "rm -rf x"]);
+  });
+
+  it("write/edit file bebas izin (risk safe)", async () => {
+    let asked = 0;
+    const p = new PermissionEngine(false, {
+      asker: async () => {
+        asked++;
+        return "deny";
+      },
+    });
+    assert.equal(await p.check("write_file", { path: "a.txt" }, "safe"), "allow");
+    assert.equal(await p.check("edit_file", { path: "a.txt" }, "safe"), "allow");
+    assert.equal(asked, 0);
+  });
 });
