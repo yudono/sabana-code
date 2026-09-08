@@ -1,0 +1,37 @@
+{
+  "name": "sabana-code",
+  "version": "0.1.0",
+  "description": "Single-agent coding CLI seperti claude-code / opencode — diadaptasi dari logic sabana-dev",
+  "type": "module",
+  "bin": {
+    "sabana-code": "./dist/index.js",
+    "sabana-code-tui": "./dist/tui/main.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "benchmark": "tsx benchmark/run.ts",
+    "tui": "tsx src/tui/main.tsx"
+  },
+  "keywords": [
+    "coding-agent",
+    "claude-code",
+    "opencode",
+    "tool-calling"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "@types/react": "^19.2.18",
+    "tsx": "^4.23.12",
+    "typescript": "^5.8.3"
+  }
+}

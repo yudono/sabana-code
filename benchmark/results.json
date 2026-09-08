@@ -1,0 +1,72 @@
+{
+  "at": "2026-09-08T06:23:36.654Z",
+  "provider": "mock",
+  "model": "gpt-4o-mini",
+  "summary": {
+    "passed": 5,
+    "total": 5
+  },
+  "tasks": [
+    {
+      "id": "create-config",
+      "title": "Buat file config.json yang valid",
+      "agentSuccess": true,
+      "steps": 2,
+      "filesModified": [
+        "config.json"
+      ],
+      "verifyOk": true,
+      "ms": 5,
+      "passed": true
+    },
+    {
+      "id": "fix-bug",
+      "title": "Perbaiki off-by-one di fungsi average",
+      "agentSuccess": true,
+      "steps": 2,
+      "filesModified": [
+        "calc.mjs"
+      ],
+      "verifyOk": true,
+      "ms": 45,
+      "passed": true
+    },
+    {
+      "id": "rename-refactor",
+      "title": "Rename fungsi di semua file pemakai",
+      "agentSuccess": true,
+      "steps": 2,
+      "filesModified": [
+        "util.mjs",
+        "app.mjs"
+      ],
+      "verifyOk": true,
+      "ms": 59,
+      "passed": true
+    },
+    {
+      "id": "scaffold-cli",
+      "title": "Scaffold CLI kecil yang bisa dijalankan",
+      "agentSuccess": true,
+      "steps": 2,
+      "filesModified": [
+        "hello.js"
+      ],
+      "verifyOk": true,
+      "ms": 82,
+      "passed": true
+    },
+    {
+      "id": "web-fetch-note",
+      "title": "Riset web lalu simpan ringkasan ke file",
+      "agentSuccess": true,
+      "steps": 2,
+      "filesModified": [
+        "note.txt"
+      ],
+      "verifyOk": true,
+      "ms": 130,
+      "passed": true
+    }
+  ]
+}

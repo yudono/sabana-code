@@ -1,0 +1,381 @@
+// ─── Single-agent loop — disederhanakan dari sabana-dev apps/api/src/agents/core/orchestrator.ts ───
+// SATU agent + tool-calling loop (seperti claude-code / opencode):
+//   LLM decides → tools execute → hasil tools masuk konteks → ulangi sampai selesai.
+// Mendukung multi-turn dalam satu session (chatTurn) + event stream untuk TUI,
+// dan trim konteks mengikuti context-window model yang dipakai.
+import type { ModelMessage } from "./llm/types.js";
+import { createProvider, type LLMProvider } from "./llm/provider.js";
+import { ToolRegistry } from "./tools/registry.js";
+import { ToolExecutor } from "./tools/executor.js";
+import {
+  editFileHandler,
+  editFileTool,
+  globHandler,
+  globTool,
+  grepHandler,
+  grepTool,
+  listDirectoryHandler,
+  listDirectoryTool,
+  readFileHandler,
+  readFileTool,
+  writeFileHandler,
+  writeFileTool,
+} from "./tools/filesystem.js";
+import { shellHandler, shellTool } from "./tools/terminal.js";
+import { webFetchHandler, webFetchTool, webSearchHandler, webSearchTool } from "./tools/web.js";
+import { PermissionEngine } from "./utils/permissions.js";
+import { LoopDetector } from "./utils/loop.js";
+import { RateLimiter } from "./utils/ratelimit.js";
+import { redactSecrets, runGuardrails } from "./utils/guardrails.js";
+import { SYSTEM_PROMPT, buildInitialContext } from "./prompt.js";
+import { ensureFits } from "./session/context.js";
+import { dim, err, log, ok, warn } from "./utils/logger.js";
+
+export interface AgentConfig {
+  model: string;
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  maxTokens: number;
+  maxSteps: number;
+  autoApprove: boolean;
+  /** Batas request LLM per menit (default 60; <=0 = tanpa batas). */
+  rpm?: number;
+  onEvent?: AgentEventHandler;
+}
+
+export interface AgentResult {
+  success: boolean;
+  steps: number;
+  filesModified: string[];
+  timeline: string[];
+  finalText: string;
+}
+
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export type AgentEvent =
+  | { type: "step"; step: number; maxSteps: number }
+  | { type: "text"; delta: string }
+  | { type: "text_end" }
+  | { type: "tool_start"; call: ToolCallInfo }
+  | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number }
+  | { type: "warn"; message: string }
+  | { type: "error"; message: string }
+  | { type: "done"; steps: number; files: number }
+  | { type: "trimmed"; count: number };
+
+export type AgentEventHandler = (ev: AgentEvent) => void;
+
+/** Handler default: perilaku CLI lama (tulis ke stdout/stderr). */
+function defaultHandler(ev: AgentEvent): void {
+  switch (ev.type) {
+    case "step":
+      dim(`\n── step ${ev.step}/${ev.maxSteps} ──`);
+      break;
+    case "text":
+      process.stdout.write(ev.delta);
+      break;
+    case "text_end":
+      process.stdout.write("\n");
+      break;
+    case "tool_start":
+      dim(`$ ${ev.call.name} ${JSON.stringify(ev.call.args).slice(0, 160)}`);
+      break;
+    case "tool_end":
+      dim(`  → ${ev.status} (${ev.ms}ms, ${ev.bytes}b)`);
+      break;
+    case "warn":
+      warn(ev.message);
+      break;
+    case "error":
+      err(ev.message);
+      break;
+    case "done":
+      ok(`selesai dalam ${ev.steps} step, ${ev.files} file diubah.`);
+      break;
+    case "trimmed":
+      warn(`Konteks dipangkas (${ev.count} pesan lama dibuang) agar muat di window model.`);
+      break;
+  }
+}
+
+export class SingleAgent {
+  private provider: LLMProvider;
+  private registry = new ToolRegistry();
+  private executor: ToolExecutor;
+  private permissions: PermissionEngine;
+  private loops = new LoopDetector();
+  private limiter: RateLimiter;
+  private filesModified: string[] = [];
+  private timeline: string[] = [];
+  private abort: AbortController = new AbortController();
+  private emit: AgentEventHandler;
+
+  constructor(private config: AgentConfig) {
+    this.provider = createProvider(config.provider, {
+      name: config.provider,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      maxTokens: config.maxTokens,
+    });
+    this.emit = config.onEvent || defaultHandler;
+    this.limiter = new RateLimiter(config.rpm ?? 60);
+    this.permissions = new PermissionEngine(config.autoApprove);
+    this.executor = new ToolExecutor(this.registry, this.permissions);
+    for (const t of [
+      readFileTool,
+      writeFileTool,
+      editFileTool,
+      listDirectoryTool,
+      globTool,
+      grepTool,
+      shellTool,
+      webSearchTool,
+      webFetchTool,
+    ]) {
+      this.registry.register(t);
+    }
+  }
+
+  /** Ganti model/provider mid-session (bikin provider baru, riwayat tetap). */
+  setModelProvider(model: string, provider: string, apiKey: string, baseUrl: string): void {
+    this.config.model = model;
+    this.config.provider = provider;
+    this.config.apiKey = apiKey;
+    this.config.baseUrl = baseUrl;
+    this.provider = createProvider(provider, {
+      name: provider,
+      apiKey,
+      baseUrl,
+      model,
+      maxTokens: this.config.maxTokens,
+    });
+  }
+
+  abortRun(): void {
+    this.abort.abort();
+  }
+
+  /** Daftar tools untuk perintah /tools di TUI. */
+  listTools(): Array<{ name: string; description: string }> {
+    return this.registry.getAll().map((t) => ({ name: t.name, description: t.description }));
+  }
+
+  /** One-shot (dipakai CLI klasik + benchmark): session baru sekali jalan. */
+  async run(userPrompt: string, workspaceDir: string): Promise<AgentResult> {
+    const { result } = await this.chatTurn(userPrompt, workspaceDir, []);
+    return result;
+  }
+
+  /**
+   * Satu turn dalam session panjang. history = pesan LLM sejauh ini
+   * (diawali system message). Mengembalikan history terbaru + hasil turn.
+   */
+  async chatTurn(
+    userPrompt: string,
+    workspaceDir: string,
+    history: ModelMessage[],
+  ): Promise<{ messages: ModelMessage[]; result: AgentResult }> {
+    const fail = (finalText: string): { messages: ModelMessage[]; result: AgentResult } => ({
+      messages: history,
+      result: { success: false, steps: 0, filesModified: [...this.filesModified], timeline: [...this.timeline], finalText },
+    });
+
+    const guard = runGuardrails(userPrompt);
+    if (!guard.passed) {
+      this.emit({ type: "error", message: `Blocked: ${guard.reason} [${guard.code}]` });
+      return fail(guard.reason || "blocked");
+    }
+
+    this.abort = new AbortController();
+
+    // Handlers terikat workspace (sandbox) — pola sabana-dev registerHandlers()
+    this.executor.registerHandler("read_file", readFileHandler(workspaceDir));
+    this.executor.registerHandler("write_file", writeFileHandler(workspaceDir));
+    this.executor.registerHandler("edit_file", editFileHandler(workspaceDir));
+    this.executor.registerHandler("list_directory", listDirectoryHandler(workspaceDir));
+    this.executor.registerHandler("glob", globHandler(workspaceDir));
+    this.executor.registerHandler("grep", grepHandler(workspaceDir));
+    this.executor.registerHandler("shell", shellHandler(workspaceDir));
+    this.executor.registerHandler("web_search", webSearchHandler());
+    this.executor.registerHandler("web_fetch", webFetchHandler());
+
+    let messages: ModelMessage[];
+    if (history.length === 0) {
+      const tree = await this.snapshotTree(workspaceDir);
+      messages = [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: buildInitialContext(userPrompt, workspaceDir, tree) },
+      ];
+      log(`workspace: ${workspaceDir}`);
+      log(`model: ${this.config.model} (${this.config.provider})`);
+    } else {
+      messages = [...history, { role: "user", content: userPrompt }];
+    }
+
+    const fit = ensureFits(messages, this.config.model, this.config.provider);
+    messages = fit.messages;
+    if (fit.trimmed > 0) this.emit({ type: "trimmed", count: fit.trimmed });
+
+    let finalText = "";
+    let steps = 0;
+
+    while (steps < this.config.maxSteps && !this.abort.signal.aborted) {
+      steps++;
+      this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
+
+      // ── Rate limit: tunggu slot request LLM (batal = berhenti) ──
+      try {
+        await this.limiter.acquire(this.abort.signal);
+      } catch {
+        break;
+      }
+
+      // ── LLM call dengan retry 429/5xx (pola sabana-dev orchestrator) ──
+      let text = "";
+      let toolCalls: ToolCallInfo[] = [];
+      let lastError = "";
+      for (let attempt = 0; attempt < 3; attempt++) {
+        text = "";
+        toolCalls = [];
+        lastError = "";
+        try {
+          for await (const ev of this.provider.generate({
+            model: this.config.model,
+            messages,
+            tools: this.registry.toModelTools(),
+            maxTokens: this.config.maxTokens,
+            signal: this.abort.signal,
+          })) {
+            if (ev.type === "text_delta") {
+              text += ev.text;
+              this.emit({ type: "text", delta: ev.text });
+            } else if (ev.type === "tool_call") {
+              toolCalls.push({ id: ev.id, name: ev.name, args: ev.args });
+            } else if (ev.type === "error") {
+              lastError = ev.message;
+            }
+          }
+        } catch (e) {
+          lastError = (e as Error).message;
+        }
+        if (!lastError) break;
+        if (!/429|rate.?limit|quota|5\d\d|timeout|network/i.test(lastError)) break;
+        const wait = 10_000 * 2 ** attempt;
+        this.emit({ type: "warn", message: `LLM ${lastError.slice(0, 120)} — retry ${wait / 1000}s...` });
+        await new Promise((r) => setTimeout(r, wait));
+      }
+      if (text) this.emit({ type: "text_end" });
+      if (lastError && toolCalls.length === 0 && !text) {
+        this.emit({ type: "error", message: `LLM error: ${lastError}` });
+        messages.push({
+          role: "user",
+          content: `Tool error dari LLM: ${lastError}. Coba lanjutkan tanpa mengulang hal yang sama.`,
+        });
+        continue;
+      }
+
+      messages.push({
+        role: "assistant",
+        content: text || "",
+        tool_calls: toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+        })),
+      });
+      this.timeline.push(`step${steps}: text=${text.length}c tools=[${toolCalls.map((t) => t.name).join(",")}]`);
+
+      // ── Tidak ada tool call → selesai (final answer) ──
+      if (toolCalls.length === 0) {
+        finalText = text;
+        if (text.trim()) {
+          this.emit({ type: "done", steps, files: this.filesModified.length });
+          return {
+            messages,
+            result: { success: true, steps, filesModified: [...this.filesModified], timeline: [...this.timeline], finalText },
+          };
+        }
+        messages.push({ role: "user", content: "Kamu belum melakukan apa-apa. Pakai tools untuk mengerjakan request, lalu jawab ringkas." });
+        continue;
+      }
+
+      // ── Eksekusi tool calls berurutan ──
+      for (const tc of toolCalls) {
+        if (this.abort.signal.aborted) break;
+        const looped = this.loops.record(tc.name, tc.args);
+        if (looped.detected) {
+          this.emit({ type: "warn", message: `loop: ${looped.reason}` });
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({ error: `LOOP BLOCKED: ${looped.reason}` }),
+          });
+          this.loops.resetProgress();
+          messages.push({
+            role: "user",
+            content: `LOOP TERDETEKSI: ${looped.reason}. Berhenti memanggil read-only tools. Panggil write_file/edit_file SEKARANG.`,
+          });
+          break;
+        }
+
+        this.emit({ type: "tool_start", call: tc });
+        const result = await this.executor.execute(tc, this.abort.signal);
+        const outStr = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
+        this.emit({ type: "tool_end", call: tc, status: result.status, ms: result.durationMs, bytes: outStr.length });
+        this.timeline.push(`${tc.name} → ${result.status}`);
+
+        if (result.status === "success" && (tc.name === "write_file" || tc.name === "edit_file")) {
+          const p = tc.args.path as string;
+          if (p && !this.filesModified.includes(p)) this.filesModified.push(p);
+          this.loops.resetProgress();
+        }
+        if (result.status === "error") {
+          const msg = (result.output as { error?: string })?.error || outStr;
+          const eLoop = this.loops.recordError(msg);
+          if (eLoop.detected) {
+            messages.push({ role: "tool", tool_call_id: tc.id, content: redactSecrets(JSON.stringify(result.output)).slice(0, 20_000) });
+            messages.push({ role: "user", content: `${eLoop.reason} Coba pendekatan BERBEDA, jangan ulangi perintah yang sama.` });
+            break;
+          }
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: redactSecrets(outStr).slice(0, 20_000),
+        });
+      }
+
+      // Trim mengikuti window model (ganti batas kaku 32 pesan)
+      const refit = ensureFits(messages, this.config.model, this.config.provider);
+      messages = refit.messages;
+      if (refit.trimmed > 0) this.emit({ type: "trimmed", count: refit.trimmed });
+    }
+
+    return {
+      messages,
+      result: {
+        success: this.abort.signal.aborted ? false : this.filesModified.length > 0 || !!finalText,
+        steps,
+        filesModified: [...this.filesModified],
+        timeline: [...this.timeline],
+        finalText,
+      },
+    };
+  }
+
+  private async snapshotTree(workspaceDir: string): Promise<string> {
+    try {
+      const out = (await listDirectoryHandler(workspaceDir)({ maxDepth: 2 })) as { listing?: string };
+      return out.listing || "";
+    } catch {
+      return "";
+    }
+  }
+}
