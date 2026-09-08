@@ -44,7 +44,7 @@ export class ToolExecutor {
     if (!v.valid) return fail({ error: v.error });
 
     const command = call.name === "shell" ? (call.args.command as string) : undefined;
-    const decision = await this.permissions.check(call.name, call.args, tool.riskLevel, command);
+    const decision = await this.permissions.check(call.name, call.args, tool.riskLevel, command, signal);
     if (decision === "deny") {
       return fail({ error: `Permission denied: ${call.name}${command ? ` (${command})` : ""}` });
     }

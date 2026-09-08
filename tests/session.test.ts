@@ -38,6 +38,29 @@ describe("session store", () => {
     saveSession(s);
     assert.equal(lastSession()?.title, "buatkan x");
   });
+
+  it("approvals: session baru kosong, tersimpan, dan ikut ke-load", () => {
+    isolatedHome();
+    const s = createSession("m", "mock", "/tmp");
+    assert.deepEqual(s.approvals, { allowAll: [], denied: [] });
+    s.approvals = { allowAll: ["shell:npm"], denied: ["shell:rm"] };
+    saveSession(s);
+    const back = loadSession(s.id)!;
+    assert.deepEqual(back.approvals, { allowAll: ["shell:npm"], denied: ["shell:rm"] });
+  });
+
+  it("approvals: session lama tanpa field di-backfill kosong", async () => {
+    isolatedHome();
+    const s = createSession("m", "mock", "/tmp");
+    saveSession(s);
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const file = join(process.env.SABANA_HOME!, "sessions", `${s.id}.json`);
+    const raw = JSON.parse(readFileSync(file, "utf-8"));
+    delete raw.approvals;
+    writeFileSync(file, JSON.stringify(raw));
+    assert.deepEqual(loadSession(s.id)!.approvals, { allowAll: [], denied: [] });
+  });
 });
 
 describe("context guard", () => {

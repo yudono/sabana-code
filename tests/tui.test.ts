@@ -21,8 +21,11 @@ describe("slash commands", () => {
 
   it("help memuat semua perintah", () => {
     const h = helpText();
-    for (const c of ["help", "new", "sessions", "projects", "resume", "model", "provider", "login", "logout", "agents", "agent", "context", "tools", "clear", "quit"]) {
+    for (const c of ["help", "new", "sessions", "projects", "resume", "models", "providers", "compact", "login", "logout", "agents", "agent", "context", "tools", "clear", "quit"]) {
       assert.ok(h.includes(`/${c}`), `help tidak memuat /${c}`);
+    }
+    for (const c of ["model ", "provider "]) {
+      assert.ok(!h.includes(`/${c}`), `help masih memuat perintah lama /${c}`);
     }
   });
 });

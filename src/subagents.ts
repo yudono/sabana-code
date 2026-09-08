@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { SingleAgent } from "./agent.js";
 import { agentsDir } from "./home.js";
 import { SYSTEM_PROMPT } from "./prompt.js";
+import type { ApprovalState, PermissionAsker } from "./utils/permissions.js";
 
 export interface SubAgentProfile {
   name: string;
@@ -66,6 +67,8 @@ export interface SubAgentBase {
   maxTokens: number;
   maxSteps: number;
   rpm?: number;
+  approvals?: ApprovalState;
+  askPermission?: PermissionAsker;
 }
 
 export interface SubAgentResult {
@@ -73,6 +76,7 @@ export interface SubAgentResult {
   files: string[];
   steps: number;
   success: boolean;
+  approvals: ApprovalState;
 }
 
 /** Jalankan sub-agent satu tugas terisolasi (riwayat sendiri), kembalikan hasil teks. */
@@ -89,8 +93,12 @@ export async function runSubAgent(
     baseUrl: base.baseUrl,
     maxTokens: base.maxTokens,
     maxSteps: base.maxSteps,
-    autoApprove: true,
+    // Bila ada asker (TUI), sub-agent ikut meminta izin lewat UI yang sama;
+    // tanpa asker (benchmark/headless) tetap auto-approve seperti dulu.
+    autoApprove: base.askPermission ? false : true,
     rpm: base.rpm ?? 60,
+    approvals: base.approvals,
+    askPermission: base.askPermission,
     onEvent: () => {},
   });
   const system =
@@ -98,5 +106,5 @@ export async function runSubAgent(
     `\n\n## PERAN KHUSUS: ${profile.name}\n${profile.instructions}\n\n` +
     `Selesaikan TUGAS di bawah; jawaban akhirmu adalah laporan untuk session utama.`;
   const { result } = await agent.chatTurn(task, workspaceDir, [{ role: "system", content: system }]);
-  return { text: result.finalText, files: result.filesModified, steps: result.steps, success: result.success };
+  return { text: result.finalText, files: result.filesModified, steps: result.steps, success: result.success, approvals: agent.getApprovals() };
 }

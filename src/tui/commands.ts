@@ -21,8 +21,9 @@ export const COMMAND_LIST: Array<{ name: string; usage: string; desc: string }> 
   { name: "/agents", usage: "/agents", desc: "Daftar profil sub-agent kustom" },
   { name: "/agent", usage: "/agent <nama> <tugas>", desc: "Delegasikan tugas ke sub-agent" },
   { name: "/resume", usage: "/resume <id|nomor>", desc: "Lanjutkan session (dukung prefix id)" },
-  { name: "/model", usage: "/model [nama]", desc: "Lihat / ganti model" },
-  { name: "/provider", usage: "/provider [nama]", desc: "Lihat / ganti provider + uji koneksi" },
+  { name: "/models", usage: "/models [filter|nomor|nama]", desc: "Daftar model live provider + pilih" },
+  { name: "/providers", usage: "/providers [use|login ...]", desc: "Kelola multi-provider yang terkonek" },
+  { name: "/compact", usage: "/compact", desc: "Padatkan konteks sekarang (auto saat >80%)" },
   { name: "/login", usage: "/login <provider> <key>", desc: "Simpan API key ke ~/sabana-code/ (global)" },
   { name: "/logout", usage: "/logout [provider]", desc: "Lihat / hapus kredensial tersimpan" },
   { name: "/context", usage: "/context", desc: "Lihat pemakaian context window" },
@@ -33,4 +34,18 @@ export const COMMAND_LIST: Array<{ name: string; usage: string; desc: string }> 
 
 export function helpText(): string {
   return ["Perintah tersedia:", ...COMMAND_LIST.map((c) => `  ${c.usage.padEnd(22)} ${c.desc}`)].join("\n");
+}
+
+/**
+ * Cocokkan nama model persis (case-insensitive) ke daftar live terakhir
+ * atau katalog — untuk input manual via `/models <nama>`.
+ */
+export function matchModelName(arg: string, liveModels: string[], catalogIds: string[]): string | null {
+  const lower = arg.trim().toLowerCase();
+  if (!lower) return null;
+  return (
+    liveModels.find((m) => m.toLowerCase() === lower) ??
+    catalogIds.find((m) => m.toLowerCase() === lower) ??
+    null
+  );
 }

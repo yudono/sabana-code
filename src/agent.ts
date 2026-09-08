@@ -23,12 +23,14 @@ import {
 } from "./tools/filesystem.js";
 import { shellHandler, shellTool } from "./tools/terminal.js";
 import { webFetchHandler, webFetchTool, webSearchHandler, webSearchTool } from "./tools/web.js";
-import { PermissionEngine } from "./utils/permissions.js";
+import { PermissionEngine, type ApprovalState, type PermissionAsker } from "./utils/permissions.js";
 import { LoopDetector } from "./utils/loop.js";
 import { RateLimiter } from "./utils/ratelimit.js";
 import { redactSecrets, runGuardrails } from "./utils/guardrails.js";
+import { summarizeCall, summarizeResult } from "./tools/summary.js";
 import { SYSTEM_PROMPT, buildInitialContext } from "./prompt.js";
-import { ensureFits } from "./session/context.js";
+import { ensureFits, contextUsage } from "./session/context.js";
+import { AUTO_COMPACT_PCT, applyCompactSummary, buildCompactPrompt } from "./session/compact.js";
 import { dim, err, log, ok, warn } from "./utils/logger.js";
 
 export interface AgentConfig {
@@ -41,6 +43,9 @@ export interface AgentConfig {
   autoApprove: boolean;
   /** Batas request LLM per menit (default 60; <=0 = tanpa batas). */
   rpm?: number;
+  /** Keputusan izin awal (dari session tersimpan) + penanya izin interaktif. */
+  approvals?: ApprovalState;
+  askPermission?: PermissionAsker;
   onEvent?: AgentEventHandler;
 }
 
@@ -63,11 +68,12 @@ export type AgentEvent =
   | { type: "text"; delta: string }
   | { type: "text_end" }
   | { type: "tool_start"; call: ToolCallInfo }
-  | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number }
+  | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number; summary?: string }
   | { type: "warn"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; steps: number; files: number }
-  | { type: "trimmed"; count: number };
+  | { type: "trimmed"; count: number }
+  | { type: "compacted"; dropped: number };
 
 export type AgentEventHandler = (ev: AgentEvent) => void;
 
@@ -84,10 +90,10 @@ function defaultHandler(ev: AgentEvent): void {
       process.stdout.write("\n");
       break;
     case "tool_start":
-      dim(`$ ${ev.call.name} ${JSON.stringify(ev.call.args).slice(0, 160)}`);
+      dim(`$ ${summarizeCall(ev.call.name, ev.call.args)}`);
       break;
     case "tool_end":
-      dim(`  → ${ev.status} (${ev.ms}ms, ${ev.bytes}b)`);
+      dim(`  → ${ev.status}${ev.summary ? ` ${ev.summary}` : ""} (${ev.ms}ms)`);
       break;
     case "warn":
       warn(ev.message);
@@ -100,6 +106,9 @@ function defaultHandler(ev: AgentEvent): void {
       break;
     case "trimmed":
       warn(`Konteks dipangkas (${ev.count} pesan lama dibuang) agar muat di window model.`);
+      break;
+    case "compacted":
+      ok(`Konteks dipadatkan otomatis (${ev.dropped} pesan → ringkasan).`);
       break;
   }
 }
@@ -126,7 +135,10 @@ export class SingleAgent {
     });
     this.emit = config.onEvent || defaultHandler;
     this.limiter = new RateLimiter(config.rpm ?? 60);
-    this.permissions = new PermissionEngine(config.autoApprove);
+    this.permissions = new PermissionEngine(config.autoApprove, {
+      initial: config.approvals,
+      asker: config.askPermission,
+    });
     this.executor = new ToolExecutor(this.registry, this.permissions);
     for (const t of [
       readFileTool,
@@ -165,6 +177,58 @@ export class SingleAgent {
   /** Daftar tools untuk perintah /tools di TUI. */
   listTools(): Array<{ name: string; description: string }> {
     return this.registry.getAll().map((t) => ({ name: t.name, description: t.description }));
+  }
+
+  /**
+   * Padatkan riwayat via LLM: pesan lama → satu ringkasan, N pesan terakhir dipertahankan.
+   * Dipakai manual (/compact) dan otomatis saat >80% window.
+   */
+  async compactHistory(messages: ModelMessage[]): Promise<{
+    ok: boolean;
+    messages: ModelMessage[];
+    summary: string;
+    dropped: number;
+    error?: string;
+  }> {
+    if (messages.length <= 4) {
+      return { ok: false, messages, summary: "", dropped: 0, error: "Riwayat terlalu pendek untuk dipadatkan." };
+    }
+    let summary = "";
+    try {
+      for await (const ev of this.provider.generate({
+        model: this.config.model,
+        messages: [{ role: "user", content: buildCompactPrompt(messages) }],
+        maxTokens: Math.min(2048, this.config.maxTokens),
+        signal: this.abort.signal,
+      })) {
+        if (ev.type === "text_delta") summary += ev.text;
+        else if (ev.type === "error") {
+          return { ok: false, messages, summary: "", dropped: 0, error: ev.message };
+        }
+      }
+    } catch (e) {
+      return { ok: false, messages, summary: "", dropped: 0, error: (e as Error).message };
+    }
+    summary = summary.trim();
+    if (!summary) {
+      return { ok: false, messages, summary: "", dropped: 0, error: "Ringkasan kosong." };
+    }
+    const applied = applyCompactSummary(messages, summary);
+    return { ok: true, messages: applied.messages, summary, dropped: applied.dropped };
+  }
+
+  /** Keputusan izin saat ini (untuk disimpan ke session). */
+  getApprovals(): ApprovalState {
+    return this.permissions.getState();
+  }
+
+  /** Gabungkan keputusan izin (mis. dari sub-agent) ke engine ini. */
+  mergeApprovals(s: ApprovalState): void {
+    const cur = this.permissions.getState();
+    this.permissions.setState({
+      allowAll: [...new Set([...cur.allowAll, ...(s.allowAll || [])])],
+      denied: [...new Set([...cur.denied, ...(s.denied || [])])],
+    });
   }
 
   /** One-shot (dipakai CLI klasik + benchmark): session baru sekali jalan. */
@@ -225,10 +289,24 @@ export class SingleAgent {
 
     let finalText = "";
     let steps = 0;
+    let compactedThisTurn = false;
 
     while (steps < this.config.maxSteps && !this.abort.signal.aborted) {
       steps++;
       this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
+
+      // ── Auto-compact saat menyentuh >80% context window (sekali per turn) ──
+      if (!compactedThisTurn && messages.length > 8) {
+        const u = contextUsage(messages, this.config.model, this.config.provider);
+        if (u.pct > AUTO_COMPACT_PCT) {
+          const c = await this.compactHistory(messages);
+          compactedThisTurn = true;
+          if (c.ok && c.dropped > 0) {
+            messages = c.messages;
+            this.emit({ type: "compacted", dropped: c.dropped });
+          }
+        }
+      }
 
       // ── Rate limit: tunggu slot request LLM (batal = berhenti) ──
       try {
@@ -328,7 +406,10 @@ export class SingleAgent {
         this.emit({ type: "tool_start", call: tc });
         const result = await this.executor.execute(tc, this.abort.signal);
         const outStr = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
-        this.emit({ type: "tool_end", call: tc, status: result.status, ms: result.durationMs, bytes: outStr.length });
+        const summary =
+          summarizeResult(tc.name, { status: result.status, output: result.output, durationMs: result.durationMs }) ??
+          undefined;
+        this.emit({ type: "tool_end", call: tc, status: result.status, ms: result.durationMs, bytes: outStr.length, summary });
         this.timeline.push(`${tc.name} → ${result.status}`);
 
         if (result.status === "success" && (tc.name === "write_file" || tc.name === "edit_file")) {

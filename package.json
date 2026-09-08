@@ -4,8 +4,7 @@
   "description": "Single-agent coding CLI seperti claude-code / opencode — diadaptasi dari logic sabana-dev",
   "type": "module",
   "bin": {
-    "sabana-code": "./dist/index.js",
-    "sabana-code-tui": "./dist/tui/main.js"
+    "sabana-code": "./dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",

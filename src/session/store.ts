@@ -10,6 +10,7 @@ import { ensureHome, sessionsDir } from "../home.js";
 import { listSessionMeta, upsertSessionMeta } from "../db.js";
 import { projectIdFor, registerProject } from "../projects.js";
 import { contextUsage } from "./context.js";
+import { emptyApprovals, type ApprovalState } from "../utils/permissions.js";
 
 export interface Session {
   id: string;
@@ -21,6 +22,8 @@ export interface Session {
   workspaceDir: string;
   /** ID project (hash path) — satu project bisa punya banyak session. */
   projectId: string;
+  /** Keputusan izin terminal/file per session (allow all/deny). Session baru = kosong. */
+  approvals: ApprovalState;
   messages: ModelMessage[];
   filesModified: string[];
 }
@@ -59,6 +62,7 @@ export function createSession(model: string, provider: string, workspaceDir: str
     provider,
     workspaceDir,
     projectId: projectIdFor(workspaceDir),
+    approvals: emptyApprovals(),
     messages: [],
     filesModified: [],
   };
@@ -108,6 +112,7 @@ export function loadSession(id: string): Session | null {
   try {
     const s = JSON.parse(readFileSync(join(dir(), match), "utf-8")) as Session;
     if (!s.projectId) s.projectId = projectIdFor(s.workspaceDir); // backfill session lama
+    if (!s.approvals) s.approvals = emptyApprovals(); // backfill: izin lama tidak dibawa
     return s;
   } catch {
     return null;

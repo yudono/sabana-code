@@ -92,12 +92,40 @@ Perintah dalam TUI:
 | `/new`, `/sessions`, `/resume <id\|nomor>` | kelola sesi |
 | `/projects` | daftar proyek + sesi per proyek |
 | `/model [nama]`, `/provider [nama]` | lihat/ganti model & provider (+ uji koneksi) |
+| `/models [filter\|nomor]` | daftar model live dari provider + pilih (atau manual via `/model`) |
+| `/providers [use\|login ...]` | kelola multi-provider yang terkonek |
+| `/compact` | padatkan konteks sekarang (otomatis saat >80% window) |
 | `/login <provider> <key>`, `/logout` | kelola kredensial global |
 | `/agents`, `/agent <nama> <tugas>` | lihat & delegasikan ke sub-agent |
 | `/context` | pemakaian context-window model aktif |
 | `/tools`, `/clear`, `/quit` | daftar tools, bersihkan layar, keluar |
 
 `Ctrl+C` membatalkan turn yang berjalan; `Ctrl+C` lagi untuk keluar (sesi otomatis tersimpan).
+
+### Multi-provider & multi-model
+
+Provider yang didukung: `openai`, `anthropic`, `google`, `groq`, `together`,
+`openrouter`, `perplexity`, `ollama`, `custom`, `mock`.
+
+```text
+/providers                 # daftar + status koneksi tiap provider
+/providers login groq <key>
+/providers use groq        # pindah provider (atau /provider groq)
+/models                    # daftar model live dari /v1/models provider aktif
+/models llama              # saring
+/models 2                  # pilih nomor 2 (atau /model <nama> manual)
+```
+
+`/models` mengambil langsung dari endpoint provider (`GET {baseUrl}/models`,
+`GET /api/tags` untuk Ollama), menyaring ID non-chat (audio/gambar/embedding),
+dan menampilkan maksimal 40. Anthropic tak punya daftar publik → dipakai katalog
+bawaan. Daftar yang tampil bisa langsung dipilih pakai nomor.
+
+### Compact konteks
+
+- `/compact` — ringkas riwayat jadi satu pesan (N pesan terakhir dipertahankan utuh).
+- **Auto-compact (default)**: tiap turn yang menyentuh **>80% context window**
+  otomatis dipadatkan sekali sebelum lanjut, jadi sesi panjang tidak mentok.
 
 ## Konfigurasi (`~/sabana-code/settings.json`)
 
@@ -138,13 +166,16 @@ di-override per-perintah, mis. `SABANA_MODEL=gpt-4o sabana-code-tui`.
   error 429/kuota/5xx/timeout di-retry otomatis dengan backoff eksponensial.
 - **Sandbox path**: tool filesystem hanya boleh mengakses workspace (`safePath`);
   perintah `shell` yang menggantung loop (dev server, `sleep`, background `&`) diblokir.
-- Izin tool: tool berisiko meminta persetujuan interaktif, kecuali `--auto-approve`
-  (mode TUI selalu auto-approve).
+- Izin tool: setiap tool berisiko (tulis/edit file, `shell`) meminta persetujuan
+  inline — `[y]` sekali, `[a]` semua yang serupa, `[n]` tolak. Keputusan
+  `allow all`/`deny` (mis. semua perintah `npm`) tersimpan di file session
+  (`~/sabana-code/sessions/<uuid>.json`), jadi berlaku selama session itu saja;
+  session baru mengulang persetujuan dari nol.
 
 ## Untuk developer
 
 ```bash
-npm test          # 78 unit test (node:test, tanpa framework tambahan)
+npm test          # 101 unit test (node:test, tanpa framework tambahan)
 npm run benchmark # benchmark ala SWE-bench/Terminal-Bench, mock deterministik
 npm run typecheck # tsc --noEmit
 ```
@@ -156,7 +187,7 @@ src/
   agent.ts        loop single-agent (chatTurn multi-turn + event stream)
   index.ts        CLI  •  tui/  TUI (Ink)
   llm/            provider OpenAI/Anthropic/Google/Ollama/mock + katalog model
-  tools/          filesystem, terminal, web, registry, executor, sandbox
+  tools/          filesystem, terminal, web, registry, executor, sandbox, summary
   session/        store sesi + estimasi/trim context-window per model
   projects.ts     registry ~/sabana-code/projects
   subagents.ts    loader + runner ~/sabana-code/agents

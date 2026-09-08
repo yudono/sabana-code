@@ -32,6 +32,30 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     needsKey: true,
     hint: "Gemini via endpoint OpenAI-compatible (aistudio.google.com)",
   },
+  groq: {
+    baseUrl: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+    needsKey: true,
+    hint: "Groq ultra-cepat (console.groq.com)",
+  },
+  together: {
+    baseUrl: "https://api.together.xyz/v1",
+    model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    needsKey: true,
+    hint: "Together AI, banyak model open (api.together.ai)",
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "qwen/qwen-2.5-coder-32b-instruct",
+    needsKey: true,
+    hint: "OpenRouter, ratusan model (openrouter.ai)",
+  },
+  perplexity: {
+    baseUrl: "https://api.perplexity.ai",
+    model: "sonar-pro",
+    needsKey: true,
+    hint: "Perplexity + pencarian web (perplexity.ai)",
+  },
   ollama: {
     baseUrl: "http://localhost:11434/v1",
     model: "qwen2.5-coder",

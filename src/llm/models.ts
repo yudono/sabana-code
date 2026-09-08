@@ -25,6 +25,18 @@ const CATALOG: ModelInfo[] = [
   // Google Gemini (endpoint OpenAI-compatible)
   { id: "gemini-2.5-flash", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Cepat, konteks 1M" },
   { id: "gemini-2.5-pro", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Paling pintar" },
+  // Groq
+  { id: "llama-3.3-70b-versatile", provider: "groq", contextWindow: 128_000, maxOutput: 8_192, description: "Cepat & kuat" },
+  { id: "qwen-qwq-32b", provider: "groq", contextWindow: 128_000, maxOutput: 8_192, description: "Reasoning" },
+  // Together AI
+  { id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", provider: "together", contextWindow: 128_000, maxOutput: 8_192, description: "Llama cepat" },
+  { id: "Qwen/Qwen2.5-Coder-32B-Instruct", provider: "together", contextWindow: 32_768, maxOutput: 8_192, description: "Coding" },
+  // OpenRouter
+  { id: "qwen/qwen-2.5-coder-32b-instruct", provider: "openrouter", contextWindow: 32_768, maxOutput: 8_192, description: "Coding hemat" },
+  { id: "anthropic/claude-sonnet-4", provider: "openrouter", contextWindow: 200_000, maxOutput: 8_192, description: "Coding kuat" },
+  // Perplexity
+  { id: "sonar-pro", provider: "perplexity", contextWindow: 200_000, maxOutput: 8_000, description: "Riset + web" },
+  { id: "sonar", provider: "perplexity", contextWindow: 127_000, maxOutput: 8_000, description: "Ringan + web" },
   // Ollama / lokal
   { id: "qwen2.5-coder", provider: "ollama", contextWindow: 32_768, maxOutput: 4_096, description: "Coding lokal" },
   { id: "llama3.1", provider: "ollama", contextWindow: 128_000, maxOutput: 4_096, description: "Serbaguna lokal" },
@@ -37,6 +49,10 @@ const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   openai: 128_000,
   anthropic: 200_000,
   google: 1_000_000,
+  groq: 128_000,
+  together: 128_000,
+  openrouter: 128_000,
+  perplexity: 127_000,
   ollama: 32_768,
   custom: 128_000,
   mock: 128_000,
@@ -107,6 +123,21 @@ export function resolveProvider(provider: string, opts?: { settings?: boolean })
       needsKey: true,
     };
   }
+  // Provider OpenAI-compatible lain: Groq, Together, OpenRouter, Perplexity.
+  const COMPAT_DEFAULTS: Record<string, { base: string; keys: string[] }> = {
+    groq: { base: "https://api.groq.com/openai/v1", keys: ["GROQ_API_KEY"] },
+    together: { base: "https://api.together.xyz/v1", keys: ["TOGETHER_API_KEY"] },
+    openrouter: { base: "https://openrouter.ai/api/v1", keys: ["OPENROUTER_API_KEY"] },
+    perplexity: { base: "https://api.perplexity.ai", keys: ["PERPLEXITY_API_KEY", "PPLX_API_KEY"] },
+  };
+  if (provider in COMPAT_DEFAULTS) {
+    const d = COMPAT_DEFAULTS[provider];
+    return {
+      baseUrl: pick(`${provider.toUpperCase()}_BASEURL`, "SABANA_BASE_URL") || d.base,
+      apiKey: pick(...d.keys, "SABANA_API_KEY"),
+      needsKey: true,
+    };
+  }
   if (provider === "ollama") {
     return {
       baseUrl: pick("OLLAMA_BASEURL", "SABANA_BASE_URL") || "http://localhost:11434/v1",
@@ -162,5 +193,63 @@ export async function testProviderConnection(provider: string): Promise<{ ok: bo
     return { ok: true, detail: "Provider OpenAI-compatible terhubung." };
   } catch (e) {
     return { ok: false, detail: `Tidak terjangkau: ${(e as Error).message}` };
+  }
+}
+
+/** Saring ID non-chat (audio/gambar/embedding/moderasi) dari daftar /v1/models. */
+export function isChatModelId(id: string): boolean {
+  return !/whisper|tts|dall-e|moderation|embedding|audio|image|realtime|transcri|omni-moderation/i.test(id);
+}
+
+export interface ProviderModelList {
+  ok: boolean;
+  models: string[];
+  source: "live" | "catalog" | "none";
+  error?: string;
+}
+
+/**
+ * Ambil daftar model dari endpoint provider.
+ * OpenAI-compatible (openai/groq/together/openrouter/perplexity/google/custom):
+ *   GET {baseUrl}/models. Ollama: GET /api/tags. Anthropic: tak ada list publik.
+ */
+export async function fetchProviderModels(
+  provider: string,
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
+): Promise<ProviderModelList> {
+  const { baseUrl, apiKey, needsKey } = resolveProvider(provider);
+  if (provider === "anthropic") {
+    const fallback = listModels("anthropic").map((m) => m.id);
+    return { ok: true, models: fallback, source: "catalog", error: "Anthropic tak punya daftar publik — katalog bawaan." };
+  }
+  if (needsKey && !apiKey) {
+    return { ok: false, models: [], source: "none", error: "API key belum di-set." };
+  }
+  const timeoutMs = opts?.timeoutMs ?? 10_000;
+  try {
+    if (provider === "mock") {
+      return { ok: true, models: ["mock"], source: "catalog" };
+    }
+    if (provider === "ollama") {
+      const res = await fetch(`${baseUrl.replace(/\/v1$/, "")}/api/tags`, {
+        signal: opts?.signal ?? AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return { ok: false, models: [], source: "none", error: `ollama: HTTP ${res.status}` };
+      const data = (await res.json()) as { models?: Array<{ name: string }> };
+      return { ok: true, models: (data.models || []).map((m) => m.name), source: "live" };
+    }
+    const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: opts?.signal ?? AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      return { ok: false, models: [], source: "none", error: `HTTP ${res.status}: ${t.slice(0, 160)}` };
+    }
+    const data = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (data.data || []).map((m) => m.id).filter(Boolean).sort();
+    return { ok: true, models, source: "live" };
+  } catch (e) {
+    return { ok: false, models: [], source: "none", error: `Tidak terjangkau: ${(e as Error).message}` };
   }
 }
