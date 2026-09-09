@@ -14,7 +14,12 @@ import { credentialSummary, removeCredential, resolveCredentials, saveCredential
 import { PROVIDER_PRESETS, SUPPORTED_PROVIDERS } from "../settings.js";
 import { listProjects, projectIdFor, projectSessions } from "../projects.js";
 import { rpmFromSettings } from "../settings.js";
-import { summarizeCall } from "../tools/summary.js";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { safePath } from "../tools/sandbox.js";
+import { summarizeCall, summarizeResult } from "../tools/summary.js";
+import { highlight, type HlSeg } from "./highlight.js";
+import { createMouseParser, stripMouseSequences } from "./mouse.js";
+import { buildPreviewForTool } from "./preview.js";
 import type { PermissionAsker, PermissionRequest, AskerVerdict } from "../utils/permissions.js";
 import { listAgents, loadAgent, runSubAgent } from "../subagents.js";
 import { contextUsage } from "../session/context.js";
@@ -32,8 +37,49 @@ import { helpText, matchModelName, parseCommand } from "./commands.js";
 export type ChatItem =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; id: string; summary: string; detail?: string; status: "running" | "ok" | "error" }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      preview: PreviewRef;
+      summary: string;
+      detail?: string;
+      status: "running" | "ok" | "error";
+      /** Output mentah terpotong (untuk pratinjau fullscreen). */
+      output?: string;
+    }
   | { kind: "info"; tone: "dim" | "yellow" | "red" | "green"; text: string };
+
+/** Referensi minimal untuk membangun pratinjau (tanpa konten besar). */
+export interface PreviewRef {
+  name: string;
+  path?: string;
+  command?: string;
+  url?: string;
+  query?: string;
+  pattern?: string;
+}
+
+/** Batas simpan output per tool-call (pratinjau). */
+export const PREVIEW_STORE_CAP = 20_000;
+
+export function previewRefFor(name: string, args: Record<string, unknown>): PreviewRef {
+  const s = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  return {
+    name,
+    path: s(args.path),
+    command: s(args.command),
+    url: s(args.url),
+    query: s(args.query),
+    pattern: s(args.pattern),
+  };
+}
+
+function capOutput(output: unknown): string | undefined {
+  if (output === undefined) return undefined;
+  const s = typeof output === "string" ? output : JSON.stringify(output);
+  return s.length > PREVIEW_STORE_CAP ? s.slice(0, PREVIEW_STORE_CAP) + "\n…[dipotong]" : s;
+}
 
 export interface TuiOptions {
   initialSession: Session;
@@ -90,13 +136,19 @@ function itemText(it: ChatItem): string {
   }
 }
 
-/** Perkiraan tinggi item dalam baris terminal (sudah termasuk margin). */
+/** Chrome box per kind: border(2) + margin bawah(1) untuk boxed, 0 untuk info. */
+function boxChrome(it: ChatItem): number {
+  return it.kind === "info" ? 0 : 3;
+}
+
+/** Perkiraan tinggi item dalam baris terminal (sudah termasuk border + margin). */
 export function itemRows(it: ChatItem, cols: number): number {
-  const w = Math.max(20, cols - 4);
+  const boxed = it.kind !== "info";
+  const w = Math.max(20, cols - (boxed ? 6 : 4));
   const lines = itemText(it)
     .split("\n")
     .reduce((n, ln) => n + Math.max(1, Math.ceil(cellWidth(ln) / w)), 0);
-  return lines + (it.kind === "assistant" ? 1 : 0); // marginBottom
+  return lines + boxChrome(it);
 }
 
 /**
@@ -143,8 +195,10 @@ export function computeWindow(
  */
 export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): ChatItem {
   if (it.kind !== "assistant" && it.kind !== "info" && it.kind !== "user") return it;
-  const budget = Math.max(1, maxRows - 1); // sisakan 1 baris penanda
-  const w = Math.max(20, cols - 4);
+  const boxed = it.kind !== "info";
+  // konten ≤ maxRows - penanda(1) - chrome(box border+margin, 0 utk info)
+  const budget = Math.max(1, maxRows - 1 - (boxed ? 3 : 0));
+  const w = Math.max(20, cols - (boxed ? 6 : 4));
   const lines = it.text.split("\n");
   if (it.kind === "info") {
     // Untuk info: pertahankan baris pertama (header) + berikutnya sampai budget habis
@@ -159,8 +213,8 @@ export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): Chat
     if (to >= lines.length) return it;
     return { ...it, text: lines.slice(0, to).join("\n") + `\n… (${lines.length - to} baris di bawah disembunyikan)` };
   }
-  // assistant: tetap ambil ekor
-  let used = 1; // marginBottom
+  // assistant/user: ambil ekor
+  let used = 0;
   let from = lines.length;
   while (from > 0) {
     const h = Math.max(1, Math.ceil(cellWidth(lines[from - 1]) / w));
@@ -172,19 +226,99 @@ export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): Chat
   return { ...it, text: `… (${lines.length - from} baris di atas disembunyikan)\n` + lines.slice(from).join("\n") };
 }
 
-/** Tampilkan prompt asli, bukan blob konteks awal ("## USER REQUEST\n<prompt>..."). */
-function displayPrompt(content: string): string {
-  const lines = content.split("\n");
-  const reqIdx = lines.findIndex((l) => l.trim() === "## USER REQUEST");
-  const raw = reqIdx >= 0 ? lines.slice(reqIdx + 1).join("\n").trim() : content;
-  return truncate(raw || content);
+/** Tinggi baris teks (untuk panel pratinjau & peta klik). */
+function wrapRows(s: string, w: number): number {
+  const ww = Math.max(20, w);
+  return s.split("\n").reduce((n, ln) => n + Math.max(1, Math.ceil(cellWidth(ln) / ww)), 0);
 }
 
-function rebuildItems(messages: Session["messages"]): ChatItem[] {
+/** Tampilkan prompt asli, bukan blob konteks awal.
+ *  Bentuk blob: "## USER REQUEST\n<prompt>\n\n## WORKSPACE\n...".
+ *  Hanya bagian prompt yang ditampilkan; section berikutnya dipotong. */
+export function displayPrompt(content: string): string {
+  const lines = content.split("\n");
+  const reqIdx = lines.findIndex((l) => l.trim() === "## USER REQUEST");
+  const raw = reqIdx >= 0 ? lines.slice(reqIdx + 1) : lines;
+  const prompt: string[] = [];
+  let started = reqIdx < 0;
+  for (const l of raw) {
+    if (/^##\s/.test(l)) {
+      if (started) break; // section berikutnya (WORKSPACE/FILE TREE/…) bukan prompt
+      continue;
+    }
+    started = true;
+    prompt.push(l);
+  }
+  const t = prompt.join("\n").trim();
+  return truncate(t || content);
+}
+
+/** Catatan error transien (Ctrl+C/abort) — disembunyikan saat resume, basi. */
+const ABORT_RE = /^Tool error dari LLM:/;
+
+function tryParseToolOutput(content: string): unknown {
+  const t = content.trim();
+  if (!(t.startsWith("{") && t.endsWith("}"))) return content;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return content;
+  }
+}
+
+function toolStatusOf(parsed: unknown): "ok" | "error" {
+  if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+    return "error";
+  }
+  return "ok";
+}
+
+/**
+ * Bangun ulang item chat dari riwayat tersimpan (resume).
+ * Baris tool direkonstruksi ringkas (tanpa dump isi) agar tampilan resume
+ * sama dengan sesi live: pasangan assistant.tool_calls ↔ pesan tool.
+ */
+export function rebuildItems(messages: Session["messages"]): ChatItem[] {
   const out: ChatItem[] = [];
+  const toolById = new Map<string, string>();
   for (const m of messages) {
-    if (m.role === "user") out.push({ kind: "user", text: displayPrompt(m.content) });
-    else if (m.role === "assistant" && m.content.trim()) out.push({ kind: "assistant", text: m.content });
+    if (m.role === "tool" && m.tool_call_id) toolById.set(m.tool_call_id, m.content);
+  }
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (ABORT_RE.test(m.content.trim())) continue;
+      out.push({ kind: "user", text: displayPrompt(m.content) });
+    } else if (m.role === "assistant") {
+      if (m.content.trim()) out.push({ kind: "assistant", text: m.content });
+      for (const tc of m.tool_calls ?? []) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments || "{}") as Record<string, unknown>;
+        } catch {
+          args = {};
+        }
+        const raw = toolById.get(tc.id);
+        const parsed = raw !== undefined ? tryParseToolOutput(raw) : undefined;
+        const status = toolStatusOf(parsed);
+        out.push({
+          kind: "tool",
+          id: tc.id,
+          name: tc.function.name,
+          preview: previewRefFor(tc.function.name, args),
+          summary: summarizeCall(tc.function.name, args),
+          detail:
+            parsed !== undefined
+              ? (summarizeResult(tc.function.name, {
+                  status: status === "ok" ? "success" : "error",
+                  output: parsed,
+                  durationMs: 0,
+                }) ?? undefined)
+              : undefined,
+          status,
+          output: parsed !== undefined ? capOutput(parsed) : undefined,
+        });
+      }
+    }
   }
   return out;
 }
@@ -327,6 +461,47 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     if (r) r(v);
   }, []);
 
+/** State pratinjau fullscreen: judul + baris token + teks polos per baris. */
+interface PreviewState {
+  title: string;
+  segs: HlSeg[][];
+  plain: string[];
+}
+
+  // ── Pratinjau fullscreen baris tool (klik → buka, Esc → tutup) ──
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [previewScroll, setPreviewScroll] = useState(0);
+  const previewRef = useRef<PreviewState | null>(null);
+  const rowMapRef = useRef<Array<{ y0: number; y1: number; id: string }>>([]);
+  const lastMouseAt = useRef(0);
+  const openPreviewRef = useRef<(id: string) => void>(() => {});
+  const clickRef = useRef<{ rowMap: Array<{ y0: number; y1: number; id: string }>; previewOpen: boolean }>({
+    rowMap: [],
+    previewOpen: false,
+  });
+
+  const closePreview = useCallback(() => {
+    setPreview(null);
+    setPreviewScroll(0);
+  }, []);
+
+  const openPreviewById = useCallback(
+    (id: string) => {
+      const it = itemsRef.current.find((m) => m.kind === "tool" && m.id === id);
+      if (!it || it.kind !== "tool") return;
+      const pv = buildPreviewForTool(it, workspaceDir);
+      const segs = highlight(pv.body, pv.lang);
+      setPreview({
+        title: pv.title,
+        segs,
+        plain: segs.map((ln) => ln.map((s) => s.text).join("")),
+      });
+      setPreviewScroll(0);
+      setDropdown(null);
+    },
+    [workspaceDir],
+  );
+
   // ── Event dari agent → update TUI ──
   const handleEvent = useCallback(
     (ev: AgentEvent) => {
@@ -344,6 +519,8 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           push({
             kind: "tool",
             id: ev.call.id,
+            name: ev.call.name,
+            preview: previewRefFor(ev.call.name, ev.call.args),
             summary: summarizeCall(ev.call.name, ev.call.args),
             status: "running",
           });
@@ -353,7 +530,12 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           setItems((prev) =>
             prev.map((it) =>
               it.kind === "tool" && it.id === ev.call.id
-                ? { ...it, status: ev.status === "success" ? "ok" : "error", detail: ev.summary }
+                ? {
+                    ...it,
+                    status: ev.status === "success" ? "ok" : "error",
+                    detail: ev.summary,
+                    output: capOutput(ev.output),
+                  }
                 : it,
             ),
           );
@@ -787,6 +969,18 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     [execCommand, runTurn],
   );
 
+  // Saring sisa sequence mouse dari ketikan (Ink ikut menerima bytes-nya).
+  // Lengkap selalu dibuang; serpihan CSI + sisa trailer dibuang hanya
+  // sesaat setelah aktivitas mouse (agar tak menelan ketikan normal).
+  const onInputChange = useCallback((v: string) => {
+    let c = stripMouseSequences(v);
+    if (Date.now() - lastMouseAt.current < 300) {
+      c = c.replace(/\x1b\[<?[\d;]*/g, "");
+      c = c.replace(/^(?:\d+;){1,2}\d*[mM]/, "");
+    }
+    setInput(c);
+  }, []);
+
   // Auto-submit prompt awal (mis. untuk demo / smoke test)
   const bootRef = useRef(false);
   useEffect(() => {
@@ -804,6 +998,29 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     const t = setInterval(() => setSpin((s) => (s + 1) % SPIN.length), 120);
     return () => clearInterval(t);
   }, [running]);
+
+  // Klik mouse pada baris tool → pratinjau fullscreen.
+  // Listener sendiri di stdin mentah; Ink tetap menerima bytes-nya sehingga
+  // filter di onChange + jendela escape di KeyHandler menangkal sampah ketik.
+  useEffect(() => {
+    const parser = createMouseParser((c) => {
+      const st = clickRef.current;
+      if (!st || st.previewOpen) return;
+      const hit = st.rowMap.find((r) => c.y >= r.y0 && c.y < r.y1);
+      if (hit) openPreviewRef.current(hit.id);
+    });
+    const onData = (chunk: Buffer) => {
+      const s = chunk.toString("utf-8");
+      // Selalu teruskan ke parser (sequence bisa terpotong antar chunk);
+      // cap waktu hanya untuk sequence mouse agar Esc asli tak ikut ditekan.
+      if (s.includes("\x1b[<")) lastMouseAt.current = Date.now();
+      parser(s);
+    };
+    process.stdin.on("data", onData);
+    return () => {
+      process.stdin.off("data", onData);
+    };
+  }, []);
 
   const usage = contextUsage(session.messages, session.model, session.provider);
   const visible = items.slice(cutoff).slice(-300);
@@ -841,6 +1058,57 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     windowed = [sliceItemTail(anchor, avail, cols)];
   }
 
+  // ── Peta baris terminal → id tool untuk klik mouse (koordinat 1-based).
+  // Header = border(2) + judul + workspace; lalu margin chat.
+  const headerTitle = `sabana-code  ${projectName}  ${session.id.slice(0, 8)} • ${session.model}/${session.provider}`;
+  const headerRows = 2 + wrapRows(headerTitle, cols - 6) + wrapRows(workspaceDir, cols - 6);
+  const chatStartRow = headerRows + 1 + 1;
+  {
+    let _y = chatStartRow;
+    const rowMap: Array<{ y0: number; y1: number; id: string }> = [];
+    for (const it of windowed) {
+      const h = itemRows(it, cols);
+      if (it.kind === "tool") rowMap.push({ y0: _y, y1: _y + h, id: it.id });
+      _y += h;
+    }
+    rowMapRef.current = rowMap;
+  }
+  clickRef.current = { rowMap: rowMapRef.current, previewOpen: preview !== null };
+  openPreviewRef.current = openPreviewById;
+
+  // ── Panel pratinjau fullscreen: border(2) + judul(1) + footer(1).
+  const previewAvail = preview ? Math.max(5, rows - 4 - 1 - 4 - 1 - (approval ? 5 : 0)) : 0;
+  let pvShown: HlSeg[][] = [];
+  let pvStart = 0;
+  let pvTotalRows = 0;
+  let pvScrollClamped = 0;
+  if (preview) {
+    const w = Math.max(20, cols - 6);
+    const hs = preview.plain.map((l) => Math.max(1, Math.ceil(cellWidth(l) / w)));
+    pvTotalRows = hs.reduce((a, b) => a + b, 0);
+    const maxP = Math.max(0, pvTotalRows - previewAvail);
+    pvScrollClamped = Math.min(previewScroll, maxP);
+    let skipped = 0;
+    let li = 0;
+    while (li < hs.length && skipped + hs[li] <= pvScrollClamped) {
+      skipped += hs[li];
+      li++;
+    }
+    if (li < hs.length && skipped < pvScrollClamped) li++; // lewati baris parsial atas
+    let used = 0;
+    const out: HlSeg[][] = [];
+    let idx = li;
+    while (idx < preview.segs.length && used < previewAvail) {
+      const h = hs[idx] ?? 1;
+      if (used + h > previewAvail) break;
+      out.push(preview.segs[idx]);
+      used += h;
+      idx++;
+    }
+    pvShown = out;
+    pvStart = li;
+  }
+
   return (
     <Box flexDirection="column" width={cols} height={rows} paddingX={1}>
       <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
@@ -855,10 +1123,54 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
       </Box>
 
       <Box flexDirection="column" flexGrow={1} marginTop={1}>
-        {windowed.map((it, ri) => {
-          const isStream = stream !== "" && start + ri === feed.length - 1;
+        {preview ? (
+          <Box key="__preview" borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column" flexGrow={1}>
+            <Box marginBottom={1}>
+              <Text bold>{truncate(preview.title, cols)}</Text>
+            </Box>
+            {pvShown.map((ln, i) => (
+              <Text key={pvStart + i}>
+                {ln.every((s) => s.text === "") ? (
+                  " "
+                ) : (
+                  ln.map((s, j) => (
+                    <Text key={j} color={s.dim ? undefined : s.color} dimColor={s.dim ? true : undefined} bold={s.bold}>
+                      {s.text}
+                    </Text>
+                  ))
+                )}
+              </Text>
+            ))}
+            <Box marginTop={1}>
+              <Text dimColor>
+                Esc tutup · ↑↓/PgUp/PgDn scroll{pvTotalRows > previewAvail ? ` · ↑${pvScrollClamped}/${pvTotalRows}` : ""}
+              </Text>
+            </Box>
+          </Box>
+        ) : (
+          windowed.map((it, ri) => {
+            const isStream = stream !== "" && start + ri === feed.length - 1;
+            const key = isStream ? "__stream" : `${cutoff}-${start + ri}`;
+          // Info polos; user/assistant/tool masing-masing punya box + warna sendiri.
+          if (it.kind === "info") {
+            return (
+              <Box key={key}>
+                <Text color={it.tone === "dim" ? undefined : it.tone} dimColor={it.tone === "dim"}>{it.text}</Text>
+              </Box>
+            );
+          }
+          const borderColor =
+            it.kind === "user"
+              ? "green"
+              : it.kind === "assistant"
+                ? "blue"
+                : it.status === "running"
+                  ? "yellow"
+                  : it.status === "error"
+                    ? "red"
+                    : "gray";
           return (
-            <Box key={isStream ? "__stream" : `${cutoff}-${start + ri}`} marginBottom={it.kind === "assistant" ? 1 : 0}>
+            <Box key={key} borderStyle="round" borderColor={borderColor} paddingX={1} marginBottom={1}>
               {it.kind === "user" && (
                 <Text><Text bold color="green">❯ </Text><Text>{it.text}</Text></Text>
               )}
@@ -869,15 +1181,12 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
                   {it.detail ? ` · ${it.detail}` : ""}
                 </Text>
               )}
-              {it.kind === "info" && (
-                <Text color={it.tone === "dim" ? undefined : it.tone} dimColor={it.tone === "dim"}>{it.text}</Text>
-              )}
             </Box>
           );
-        })}
+          }))}
       </Box>
 
-      {dropdown && (
+      {dropdown && !preview && (
         <Box marginTop={1} marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} paddingY={1} width={Math.min(cols - 4, 60)} flexDirection="column">
           <Box marginBottom={1}>
             <Text>
@@ -903,20 +1212,22 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           )}
         </Box>
       )}
-      <Box marginTop={1} borderStyle="single" borderColor={approval ? "yellow" : running ? "yellow" : "gray"} paddingX={1}>
-        <Text color={approval ? "yellow" : running ? "yellow" : "green"}>
-          {approval ? "⚡ " : running ? SPIN[spin] + " " : "❯ "}
-        </Text>
-        <TextInput
-          value={input}
-          onChange={setInput}
-          onSubmit={submit}
-          focus={approval === null}
-          placeholder={
-            approval ? "Menunggu izin… (y/a/n)" : running ? "Agent bekerja… (Ctrl+C batal)" : "Tulis pesan atau /perintah…"
-          }
-        />
-      </Box>
+      {!preview && (
+        <Box marginTop={1} borderStyle="single" borderColor={approval ? "yellow" : running ? "yellow" : "gray"} paddingX={1}>
+          <Text color={approval ? "yellow" : running ? "yellow" : "green"}>
+            {approval ? "⚡ " : running ? SPIN[spin] + " " : "❯ "}
+          </Text>
+          <TextInput
+            value={input}
+            onChange={onInputChange}
+            onSubmit={submit}
+            focus={approval === null && preview === null}
+            placeholder={
+              approval ? "Menunggu izin… (y/a/n)" : running ? "Agent bekerja… (Ctrl+C batal)" : "Tulis pesan atau /perintah…"
+            }
+          />
+        </Box>
+      )}
 
       {approval && (
         <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
@@ -940,6 +1251,42 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
 
       {isRawModeSupported && <KeyHandler onKey={(inp, key) => {
         if (process.env.SABANA_DEBUG_INPUT) flog("input", `inp=${JSON.stringify(inp)} key=${JSON.stringify(key)}`);
+        // Artefak escape dari sequence mouse (klik ditangani parser sendiri).
+        if (key.escape && Date.now() - lastMouseAt.current < 120) return;
+        // Pratinjau fullscreen: Esc/Ctrl+C menutup; panah scroll; lainnya abaikan.
+        if (previewRef.current) {
+          if (key.escape) {
+            closePreview();
+            return;
+          }
+          if (key.ctrl && inp === "c") {
+            closePreview();
+            return;
+          }
+          if (key.upArrow) {
+            setPreviewScroll((s) => Math.max(0, s - SCROLL_STEP));
+            return;
+          }
+          if (key.downArrow) {
+            setPreviewScroll((s) => s + SCROLL_STEP);
+            return;
+          }
+          if (key.pageUp) {
+            setPreviewScroll((s) => Math.max(0, s - previewAvail));
+            return;
+          }
+          if (key.pageDown) {
+            setPreviewScroll((s) => s + previewAvail);
+            return;
+          }
+          if (approvalActive.current) {
+            const c = inp.toLowerCase();
+            if (c === "y") answerApproval("once");
+            else if (c === "a") answerApproval("all");
+            else if (c === "n") answerApproval("deny");
+          }
+          return;
+        }
         // Dropdown navigation takes priority
         if (dropdown) {
           if (key.upArrow) {

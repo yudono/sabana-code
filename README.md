@@ -7,9 +7,9 @@ session, kredensial, log, dan database tersimpan global di `~/sabana-code/`.
 ## Fitur
 
 - **Single agent process** — satu loop otonom: pahami perintah → panggil tools → verifikasi → selesai.
-- **Tool calling** — `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`
+- **Tool calling** — `read_file`, `write_file`, `modified_file` (diff), `delete_file`, `list_directory`, `glob`, `grep`
   (filesystem), `shell` (terminal), `web_search`, `web_fetch` (internet via Tavily + fallback).
-- **TUI interaktif** (`sabana-code-tui`) — chat, input prompt, live tool-calling, ganti model/provider,
+- **TUI interaktif** (`sabana-code`) — chat, input prompt, live tool-calling, ganti model/provider,
   resume session, sub-agent.
 - **Session per project** — tiap folder proyek otomatis terdaftar di `~/sabana-code/projects/`,
   tiap sesi tersimpan sebagai UUID di `~/sabana-code/sessions/` dan bisa di-resume.
@@ -35,7 +35,7 @@ npm run build
 
 # 2. Pasang perintah global (sekali saja)
 npm link
-# → tersedia `sabana-code` dan `sabana-code-tui` di PATH
+# → tersedia `sabana-code` di PATH
 
 # 3. Setup pertama (membuat ~/sabana-code/ + settings.json + pilih provider)
 sabana-code setup
@@ -79,10 +79,13 @@ Opsi: `-C/--workspace`, `--model`, `--provider openai|anthropic|google|ollama|cu
 ## Penggunaan TUI
 
 ```bash
-sabana-code-tui -C ./my-project
-sabana-code-tui --continue         # lanjutkan sesi terakhir
-sabana-code-tui --resume 3fa4ea9f # lanjutkan sesi (boleh prefix UUID)
+sabana-code -C ./my-project
+sabana-code --continue         # lanjutkan sesi terakhir
+sabana-code -r 3fa4ea9f        # lanjutkan sesi (boleh prefix UUID)
 ```
+
+Setiap keluar TUI (`Ctrl+C` saat idle atau `/quit`), terminal menampilkan
+perintah resume sesi tersebut, mis. `sabana-code -r 3fa4ea9f -C ./my-project`.
 
 Perintah dalam TUI:
 
@@ -155,7 +158,7 @@ bawaan. Daftar yang tampil bisa langsung dipilih pakai nomor.
 | `TAVILY_API_KEY` | opsional, untuk `web_search` berkualitas (tanpanya pakai DuckDuckGo) |
 
 Environment variable asli selalu menang atas `settings.json`, jadi nilai di atas bisa
-di-override per-perintah, mis. `SABANA_MODEL=gpt-4o sabana-code-tui`.
+di-override per-perintah, mis. `SABANA_MODEL=gpt-4o sabana-code`.
 
 ## Keamanan: guardrails & rate limiting
 

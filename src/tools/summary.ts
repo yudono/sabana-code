@@ -1,5 +1,5 @@
 // ─── Ringkasan tool-call untuk tampilan: JANGAN dump isi file/output ───
-// Baris panggilan:  "read_file App.tsx", "edit_file App.tsx", "$ npm test"
+// Baris panggilan:  "read_file App.tsx", "modified_file App.tsx", "$ npm test"
 // Baris hasil:      "(baris 1–50 dari 320)", "(+1.2k)", "(exit 0 · 1.2s)"
 
 export function fmtBytes(n: number): string {
@@ -48,7 +48,8 @@ export function summarizeCall(name: string, args: Record<string, unknown>): stri
       return `read_file ${path}${range}`;
     }
     case "write_file":
-    case "edit_file":
+    case "modified_file":
+    case "delete_file":
       return `${name} ${path}`;
     case "shell":
       return `$ ${oneLine(str(args.command), 100) || "(perintah kosong)"}`;
@@ -104,10 +105,19 @@ export function summarizeResult(name: string, r: ToolOutcome): string | null {
       if (b === null) return null;
       return `+${fmtBytes(b)}${l !== null ? `, ${l} baris` : ""}`;
     }
-    case "edit_file": {
-      const d = num("bytesChanged");
-      if (d === null) return null;
-      return `(${fmtSigned(d)})`;
+    case "modified_file": {
+      const a = num("added");
+      const r = num("removed");
+      if (a === null || r === null) {
+        // Kompatibel output lama berbasis byte.
+        const d = num("bytesChanged");
+        if (d === null) return null;
+        return `(${fmtSigned(d)})`;
+      }
+      return `(+${a}, -${r})`;
+    }
+    case "delete_file": {
+      return o.directory ? "(direktori dihapus)" : "(dihapus)";
     }
     case "shell": {
       const code = num("exitCode") ?? 0;

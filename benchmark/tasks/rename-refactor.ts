@@ -34,11 +34,11 @@ export const task: BenchmarkTask = {
   },
   mockPlan: [
     {
-      name: "edit_file",
+      name: "modified_file",
       args: { path: "util.mjs", search: "function getUserName(u)", replace: "function getDisplayName(u)" },
     },
     {
-      name: "edit_file",
+      name: "modified_file",
       args: {
         path: "app.mjs",
         search: 'import { getUserName } from "./util.mjs";',
@@ -46,7 +46,7 @@ export const task: BenchmarkTask = {
       },
     },
     {
-      name: "edit_file",
+      name: "modified_file",
       args: { path: "app.mjs", search: "getUserName({", replace: "getDisplayName({" },
     },
   ],

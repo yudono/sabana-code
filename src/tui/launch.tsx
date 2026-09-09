@@ -12,6 +12,7 @@ import { ensureInitialized } from "../setup.js";
 import { flog } from "../utils/filelog.js";
 import { setQuiet } from "../utils/logger.js";
 import { setMockPlan } from "../llm/mock.js";
+import { MOUSE_OFF, MOUSE_ON } from "./mouse.js";
 
 export interface TuiArgs {
   workspace: string;
@@ -45,7 +46,7 @@ export function parseTuiArgs(argv: string[]): TuiArgs {
     else if (a === "--max-steps" && argv[i + 1]) {
       const n = parseInt(argv[++i], 10);
       if (!isNaN(n) && n > 0) args.maxSteps = n;
-    } else if (a === "--resume" && argv[i + 1]) args.resumeId = argv[++i];
+    } else if ((a === "-r" || a === "--resume") && argv[i + 1]) args.resumeId = argv[++i];
     else if (a === "--continue") args.cont = true;
     else if (!a.startsWith("-")) args.promptParts.push(a);
   }
@@ -66,7 +67,7 @@ Options:
   --model <name>           Model awal (default dari setup)
   --provider <name>        openai | anthropic | google | groq | together | openrouter | perplexity | ollama | custom | mock
   --max-steps <n>          Maks step per turn (default: 40)
-  --resume <id>            Lanjutkan session (dukung prefix)
+  --resume, -r <id>        Lanjutkan session (dukung prefix)
   --continue               Lanjutkan session terakhir
   -h, --help               Bantuan ini
 
@@ -77,6 +78,13 @@ Di dalam TUI: /help /new /sessions /projects /resume /models
 
 const ENTER_ALT = "\x1b[?1049h";
 const EXIT_ALT = "\x1b[?1049l";
+
+/** Baris hint resume yang dicetak setelah TUI keluar (pure, di-unit-test). */
+export function formatResumeHint(sessionId: string, workspaceDir: string): string {
+  const short = sessionId.slice(0, 8);
+  const ws = /\s/.test(workspaceDir) ? `"${workspaceDir}"` : workspaceDir;
+  return `Session tersimpan (${short}). Lanjutkan dengan:\n  sabana-code -r ${short} -C ${ws}`;
+}
 
 export async function launchTui(args: TuiArgs): Promise<void> {
   if (args.help) {
@@ -143,7 +151,7 @@ export async function launchTui(args: TuiArgs): Promise<void> {
   // dan layar terminal dikembalikan utuh saat keluar.
   // Matikan logger langsung supaya tidak ada tulisan liar yang menumpuk render Ink.
   setQuiet(true);
-  process.stdout.write(ENTER_ALT);
+  process.stdout.write(ENTER_ALT + MOUSE_ON);
   try {
     const app = render(
       <App initialSession={session} workspaceDir={workspace} maxSteps={args.maxSteps} initialPrompt={initialPrompt} />,
@@ -151,6 +159,13 @@ export async function launchTui(args: TuiArgs): Promise<void> {
     );
     await app.waitUntilExit();
   } finally {
+    try {
+      process.stdout.write(MOUSE_OFF);
+    } catch {
+      /* abaikan */
+    }
     process.stdout.write(EXIT_ALT);
   }
+  // Alt-screen sudah dikembalikan — aman cetak hint resume ke terminal normal.
+  process.stdout.write(`\n${formatResumeHint(session.id, workspace)}\n`);
 }

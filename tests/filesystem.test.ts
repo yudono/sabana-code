@@ -4,7 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  editFileHandler,
+  buildDiff,
+  deleteFileHandler,
+  modifiedFileHandler,
   globHandler,
   grepHandler,
   listDirectoryHandler,
@@ -61,7 +63,7 @@ describe("filesystem tools", () => {
   it("edit sukses mengubah konten", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "c.txt", content: "foo bar" });
-    const r = (await editFileHandler(ws)({ path: "c.txt", search: "bar", replace: "baz" })) as {
+    const r = (await modifiedFileHandler(ws)({ path: "c.txt", search: "bar", replace: "baz" })) as {
       edited: boolean;
     };
     assert.equal(r.edited, true);
@@ -72,14 +74,61 @@ describe("filesystem tools", () => {
   it("edit gagal bila search tidak ketemu atau ambigu", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "d.txt", content: "aa bb aa" });
-    const miss = (await editFileHandler(ws)({ path: "d.txt", search: "zz", replace: "q" })) as {
+    const miss = (await modifiedFileHandler(ws)({ path: "d.txt", search: "zz", replace: "q" })) as {
       error: string;
     };
     assert.ok(miss.error.includes("not found"));
-    const amb = (await editFileHandler(ws)({ path: "d.txt", search: "aa", replace: "q" })) as {
+    const amb = (await modifiedFileHandler(ws)({ path: "d.txt", search: "aa", replace: "q" })) as {
       error: string;
     };
     assert.ok(amb.error.includes("2x"));
+  });
+
+  it("modified mengembalikan unified diff", async () => {
+    const ws = freshWs();
+    await writeFileHandler(ws)({ path: "e.txt", content: "satu\ndua\ntiga\nempat\nlima\n" });
+    const r = (await modifiedFileHandler(ws)({ path: "e.txt", search: "tiga", replace: "TIGA!" })) as {
+      edited: boolean;
+      added: number;
+      removed: number;
+      diff: string;
+    };
+    assert.equal(r.edited, true);
+    assert.equal(r.added, 1);
+    assert.equal(r.removed, 1);
+    assert.ok(r.diff.includes("--- e.txt"));
+    assert.ok(r.diff.includes("+++ e.txt"));
+    assert.ok(r.diff.includes("-tiga"));
+    assert.ok(r.diff.includes("+TIGA!"));
+    assert.ok(r.diff.includes(" satu")); // konteks
+  });
+
+  it("buildDiff: hunk header + konteks benar untuk ganti multi-baris", () => {
+    const oldC = ["a", "b", "c", "d", "e", "f", "g", "h"].join("\n");
+    const newC = ["a", "b", "X", "Y", "e", "f", "g", "h"].join("\n");
+    const d = buildDiff("f.txt", oldC, newC);
+    assert.equal(d.added, 2);
+    assert.equal(d.removed, 2);
+    assert.ok(d.diff.includes("@@ -1,7 +1,7 @@"));
+    assert.ok(d.diff.includes("-c"));
+    assert.ok(d.diff.includes("-d"));
+    assert.ok(d.diff.includes("+X"));
+    assert.ok(d.diff.includes("+Y"));
+    assert.ok(d.diff.includes(" e"));
+  });
+
+  it("delete menghapus file, menolak direktori berisi & path kabur", async () => {
+    const ws = freshWs();
+    await writeFileHandler(ws)({ path: "del.txt", content: "x" });
+    await writeFileHandler(ws)({ path: "sub/isi.txt", content: "y" });
+    const okDel = (await deleteFileHandler(ws)({ path: "del.txt" })) as { deleted: boolean };
+    assert.equal(okDel.deleted, true);
+    const gone = (await deleteFileHandler(ws)({ path: "del.txt" })) as { error: string };
+    assert.ok(gone.error.includes("not found"));
+    const nonEmpty = (await deleteFileHandler(ws)({ path: "sub" })) as { error: string };
+    assert.ok(nonEmpty.error.includes("non-empty"));
+    const esc = (await deleteFileHandler(ws)({ path: "../luar.txt" })) as { error: string; denied: boolean };
+    assert.equal(esc.denied, true);
   });
 
   it("list / glob / grep menemukan file", async () => {

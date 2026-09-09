@@ -19,8 +19,8 @@ describe("permission engine", () => {
       key: "shell:npm",
       base: "npm",
     });
-    const fk = permissionKey("edit_file", { path: "App.tsx" }, undefined);
-    assert.equal(fk.key, "edit_file:App.tsx");
+    const fk = permissionKey("modified_file", { path: "App.tsx" }, undefined);
+    assert.equal(fk.key, "modified_file:App.tsx");
     assert.equal(fk.base, undefined);
   });
 
@@ -106,7 +106,7 @@ describe("permission engine", () => {
       },
     });
     assert.equal(await p.check("write_file", { path: "a.txt" }, "safe"), "allow");
-    assert.equal(await p.check("edit_file", { path: "a.txt" }, "safe"), "allow");
+    assert.equal(await p.check("modified_file", { path: "a.txt" }, "safe"), "allow");
     assert.equal(asked, 0);
   });
 });

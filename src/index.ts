@@ -27,8 +27,8 @@ Options:
   --model <name>            Model (default dari setup)
   --provider <name>         openai | anthropic | google | groq | together | openrouter | perplexity | ollama | custom | mock
   --max-steps <n>           Maks step per turn (default: 40)
-  --resume <id>             Lanjutkan session (dukung prefix)
-  --continue                Lanjutkan session terakhir
+  --resume, -r <id>        Lanjutkan session (dukung prefix)
+  --continue               Lanjutkan session terakhir
   -h, --help                Bantuan ini
 
 Setup pertama membuat ~/sabana-code/ (sessions/, logs/, settings.json, sabana.db)

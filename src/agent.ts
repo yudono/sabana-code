@@ -8,14 +8,16 @@ import { createProvider, type LLMProvider } from "./llm/provider.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { ToolExecutor } from "./tools/executor.js";
 import {
-  editFileHandler,
-  editFileTool,
+  deleteFileHandler,
+  deleteFileTool,
   globHandler,
   globTool,
   grepHandler,
   grepTool,
   listDirectoryHandler,
   listDirectoryTool,
+  modifiedFileHandler,
+  modifiedFileTool,
   readFileHandler,
   readFileTool,
   writeFileHandler,
@@ -68,7 +70,7 @@ export type AgentEvent =
   | { type: "text"; delta: string }
   | { type: "text_end" }
   | { type: "tool_start"; call: ToolCallInfo }
-  | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number; summary?: string }
+  | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number; summary?: string; output?: unknown }
   | { type: "warn"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; steps: number; files: number }
@@ -143,7 +145,8 @@ export class SingleAgent {
     for (const t of [
       readFileTool,
       writeFileTool,
-      editFileTool,
+      modifiedFileTool,
+      deleteFileTool,
       listDirectoryTool,
       globTool,
       grepTool,
@@ -262,7 +265,8 @@ export class SingleAgent {
     // Handlers terikat workspace (sandbox) — pola sabana-dev registerHandlers()
     this.executor.registerHandler("read_file", readFileHandler(workspaceDir));
     this.executor.registerHandler("write_file", writeFileHandler(workspaceDir));
-    this.executor.registerHandler("edit_file", editFileHandler(workspaceDir));
+    this.executor.registerHandler("modified_file", modifiedFileHandler(workspaceDir));
+    this.executor.registerHandler("delete_file", deleteFileHandler(workspaceDir));
     this.executor.registerHandler("list_directory", listDirectoryHandler(workspaceDir));
     this.executor.registerHandler("glob", globHandler(workspaceDir));
     this.executor.registerHandler("grep", grepHandler(workspaceDir));
@@ -398,7 +402,7 @@ export class SingleAgent {
           this.loops.resetProgress();
           messages.push({
             role: "user",
-            content: `LOOP TERDETEKSI: ${looped.reason}. Berhenti memanggil read-only tools. Panggil write_file/edit_file SEKARANG.`,
+            content: `LOOP TERDETEKSI: ${looped.reason}. Berhenti memanggil read-only tools. Panggil write_file/modified_file SEKARANG.`,
           });
           break;
         }
@@ -409,12 +413,17 @@ export class SingleAgent {
         const summary =
           summarizeResult(tc.name, { status: result.status, output: result.output, durationMs: result.durationMs }) ??
           undefined;
-        this.emit({ type: "tool_end", call: tc, status: result.status, ms: result.durationMs, bytes: outStr.length, summary });
+        this.emit({ type: "tool_end", call: tc, status: result.status, ms: result.durationMs, bytes: outStr.length, summary, output: result.output });
         this.timeline.push(`${tc.name} → ${result.status}`);
 
-        if (result.status === "success" && (tc.name === "write_file" || tc.name === "edit_file")) {
+        if (result.status === "success" && (tc.name === "write_file" || tc.name === "modified_file")) {
           const p = tc.args.path as string;
           if (p && !this.filesModified.includes(p)) this.filesModified.push(p);
+          this.loops.resetProgress();
+        }
+        if (result.status === "success" && tc.name === "delete_file") {
+          const p = tc.args.path as string;
+          if (p) this.filesModified = this.filesModified.filter((f) => f !== p);
           this.loops.resetProgress();
         }
         if (result.status === "error") {

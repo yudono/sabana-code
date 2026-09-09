@@ -22,6 +22,15 @@
     "tool-calling"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "agents",
+    "README.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "ink": "^7.1.1",
     "ink-text-input": "^6.0.0",

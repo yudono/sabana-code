@@ -33,7 +33,7 @@ export const task: BenchmarkTask = {
   mockPlan: [
     { name: "read_file", args: { path: "calc.mjs" } },
     {
-      name: "edit_file",
+      name: "modified_file",
       args: { path: "calc.mjs", search: "nums.length + 1", replace: "nums.length" },
     },
   ],

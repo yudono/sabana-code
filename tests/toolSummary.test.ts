@@ -31,7 +31,7 @@ describe("fmt helpers", () => {
 describe("summarizeCall", () => {
   it("file tool hanya tampil nama + path", () => {
     assert.equal(summarizeCall("read_file", { path: "App.tsx" }), "read_file App.tsx");
-    assert.equal(summarizeCall("edit_file", { path: "App.tsx" }), "edit_file App.tsx");
+    assert.equal(summarizeCall("modified_file", { path: "App.tsx" }), "modified_file App.tsx");
     assert.equal(summarizeCall("write_file", { path: "a/b.ts" }), "write_file a/b.ts");
   });
 
@@ -83,14 +83,30 @@ describe("summarizeResult", () => {
     );
   });
 
-  it("edit: diff bersih bertanda", () => {
+  it("modified: diff (+added, -removed)", () => {
     assert.equal(
-      summarizeResult("edit_file", { status: "success", output: { bytesChanged: 11_200 }, durationMs: 3 }),
-      "(+11.2k)",
+      summarizeResult("modified_file", { status: "success", output: { added: 12, removed: 5 }, durationMs: 3 }),
+      "(+12, -5)",
     );
     assert.equal(
-      summarizeResult("edit_file", { status: "success", output: { bytesChanged: -292 }, durationMs: 3 }),
+      summarizeResult("modified_file", { status: "success", output: { added: 0, removed: 0 }, durationMs: 3 }),
+      "(+0, -0)",
+    );
+    // Kompatibel output lama berbasis byte.
+    assert.equal(
+      summarizeResult("modified_file", { status: "success", output: { bytesChanged: -292 }, durationMs: 3 }),
       "(-292)",
+    );
+  });
+
+  it("delete: status hapus", () => {
+    assert.equal(
+      summarizeResult("delete_file", { status: "success", output: { path: "a.txt", deleted: true }, durationMs: 3 }),
+      "(dihapus)",
+    );
+    assert.equal(
+      summarizeResult("delete_file", { status: "success", output: { path: "d", deleted: true, directory: true }, durationMs: 3 }),
+      "(direktori dihapus)",
     );
   });
 

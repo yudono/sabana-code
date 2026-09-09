@@ -6,38 +6,39 @@ const user = (text: string): ChatItem => ({ kind: "user", text });
 const assistant = (text: string): ChatItem => ({ kind: "assistant", text });
 
 describe("viewport itemRows", () => {
-  it("baris pendek = 1 baris", () => {
-    assert.equal(itemRows(user("halo"), 80), 1);
+  it("baris pendek = konten + chrome box (border 2 + margin 1)", () => {
+    assert.equal(itemRows(user("halo"), 80), 4);
   });
 
-  it("baris panjang wrap sesuai lebar (termasuk prefix ❯ = 3 sel)", () => {
-    // lebar teks = cols-4 = 76; prefix "❯ " = 3 sel → sisa 73
-    assert.equal(itemRows(user("a".repeat(73)), 80), 1);
-    assert.equal(itemRows(user("a".repeat(74)), 80), 2);
-    assert.equal(itemRows(user("a".repeat(146)), 80), 2);
-    assert.equal(itemRows(user("a".repeat(150)), 80), 3); // 153 sel / 76 → 3
+  it("baris panjang wrap sesuai lebar box (cols-6, prefix ❯ = 3 sel)", () => {
+    // lebar konten = 80-6 = 74; prefix "❯ " = 3 sel
+    assert.equal(itemRows(user("a".repeat(71)), 80), 4);
+    assert.equal(itemRows(user("a".repeat(72)), 80), 5);
+    assert.equal(itemRows(user("a".repeat(142)), 80), 5);
+    assert.equal(itemRows(user("a".repeat(146)), 80), 6);
   });
 
-  it("multiline dihitung per baris + margin assistant", () => {
-    assert.equal(itemRows(assistant("l1\nl2"), 80), 3); // 2 baris + 1 margin
-    assert.equal(itemRows(user("l1\nl2"), 80), 2); // tanpa margin
+  it("multiline dihitung per baris + chrome box", () => {
+    assert.equal(itemRows(assistant("l1\nl2"), 80), 5); // 2 baris + 3 chrome
+    assert.equal(itemRows(user("l1\nl2"), 80), 5);
   });
 
   it("karakter lebar (CJK) dihitung 2 sel", () => {
-    // "あ"*36 = 72 sel + prefix 3 = 75 → 1 baris; *37 = 77 → 2 baris
-    assert.equal(itemRows(user("あ".repeat(36)), 80), 1);
-    assert.equal(itemRows(user("あ".repeat(37)), 80), 2);
+    // "あ"*35 = 70 sel + prefix 3 = 73 → 1 baris → 4; *36 = 75 → 2 baris → 5
+    assert.equal(itemRows(user("あ".repeat(35)), 80), 4);
+    assert.equal(itemRows(user("あ".repeat(36)), 80), 5);
   });
 
   it("prefix ❯ ikut dihitung (bias aman: simbol = 2 sel)", () => {
-    // "❯ "(2+1) + 73 char = 76 sel → 1 baris; +1 char → 2 baris
-    assert.equal(itemRows(user("b".repeat(73)), 80), 1);
-    assert.equal(itemRows(user("b".repeat(74)), 80), 2);
+    // "❯ "(2+1) + 70 char = 73 sel → 1 baris → 4; +1 char → 2 baris → 5
+    assert.equal(itemRows(user("b".repeat(70)), 80), 4);
+    assert.equal(itemRows(user("b".repeat(71)), 80), 4);
+    assert.equal(itemRows(user("b".repeat(72)), 80), 5);
   });
 
-  it("tool selalu 1 baris untuk ringkasan pendek", () => {
+  it("tool selalu 1 baris konten + chrome untuk ringkasan pendek", () => {
     const t: ChatItem = { kind: "tool", id: "1", summary: "read_file App.tsx", status: "ok", detail: "baris 1–50 dari 320" };
-    assert.equal(itemRows(t, 80), 1);
+    assert.equal(itemRows(t, 80), 4);
   });
 
   it("sliceItemTail: item muat dikembalikan utuh", () => {

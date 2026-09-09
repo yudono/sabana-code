@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   readSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -67,7 +68,7 @@ export function readFileHandler(workspaceDir: string) {
 // ─── write_file ───
 export const writeFileTool: ToolDefinition = {
   name: "write_file",
-  description: "Tulis file baru / timpa seluruh file. Buat folder induk otomatis. Untuk edit kecil pakai edit_file.",
+  description: "Tulis file baru / timpa seluruh file. Buat folder induk otomatis. Untuk edit kecil pakai modified_file.",
   inputSchema: {
     type: "object",
     properties: {
@@ -93,10 +94,11 @@ export function writeFileHandler(workspaceDir: string) {
   };
 }
 
-// ─── edit_file ───
-export const editFileTool: ToolDefinition = {
-  name: "edit_file",
-  description: "Edit terarah dengan search-and-replace eksak. Gagal bila search tidak unik/tidak ketemu.",
+// ─── modified_file ───
+export const modifiedFileTool: ToolDefinition = {
+  name: "modified_file",
+  description:
+    "Edit terarah dengan search-and-replace eksak. Mengembalikan unified diff (+/-). Gagal bila search tidak unik/tidak ketemu.",
   inputSchema: {
     type: "object",
     properties: {
@@ -111,7 +113,49 @@ export const editFileTool: ToolDefinition = {
   riskLevel: "safe",
 };
 
-export function editFileHandler(workspaceDir: string) {
+export interface FileDiff {
+  added: number;
+  removed: number;
+  diff: string;
+}
+
+/**
+ * Unified diff sederhana untuk SATU hunk hasil search→replace.
+ * Prefix/suffix yang sama dipangkas; konteks 3 baris di tiap sisi hunk.
+ */
+export function buildDiff(path: string, oldContent: string, newContent: string, context = 3): FileDiff {
+  const a = oldContent.split("\n");
+  const b = newContent.split("\n");
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (
+    suf < a.length - pre &&
+    suf < b.length - pre &&
+    a[a.length - 1 - suf] === b[b.length - 1 - suf]
+  ) {
+    suf++;
+  }
+  const aStart = Math.max(0, pre - context);
+  const bStart = Math.max(0, pre - context);
+  const aEnd = Math.min(a.length, a.length - suf + context);
+  const bEnd = Math.min(b.length, b.length - suf + context);
+  const out: string[] = [
+    `--- ${path}`,
+    `+++ ${path}`,
+    `@@ -${aStart + 1},${aEnd - aStart} +${bStart + 1},${bEnd - bStart} @@`,
+  ];
+  // Konteks atas: baris yang sama di kedua sisi.
+  for (let i = aStart; i < pre; i++) out.push(` ${a[i]}`);
+  const removed = a.slice(pre, a.length - suf);
+  const added = b.slice(pre, b.length - suf);
+  for (const l of removed) out.push(`-${l}`);
+  for (const l of added) out.push(`+${l}`);
+  for (let i = a.length - suf; i < aEnd; i++) out.push(` ${a[i]}`);
+  return { added: added.length, removed: removed.length, diff: out.join("\n") };
+}
+
+export function modifiedFileHandler(workspaceDir: string) {
   return async (args: Record<string, unknown>) => {
     const path = args.path as string;
     const full = safePath(workspaceDir, path);
@@ -125,7 +169,44 @@ export function editFileHandler(workspaceDir: string) {
     if (count > 1) return { error: `Search string cocok ${count}x — berikan konteks lebih panjang` };
     const next = content.replace(search, replace);
     writeFileSync(full, next, "utf-8");
-    return { path, edited: true, bytesChanged: next.length - content.length };
+    const { added, removed, diff } = buildDiff(path, content, next);
+    return { path, edited: true, bytesChanged: next.length - content.length, added, removed, diff };
+  };
+}
+
+// ─── delete_file ───
+export const deleteFileTool: ToolDefinition = {
+  name: "delete_file",
+  description: "Hapus file atau direktori KOSONG di dalam workspace. Menolak direktori berisi.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "Path relatif dari workspace root" },
+    },
+    required: ["path"],
+  },
+  permissions: { requiresPermission: false },
+  timeout: 10_000,
+  riskLevel: "safe",
+};
+
+export function deleteFileHandler(workspaceDir: string) {
+  return async (args: Record<string, unknown>) => {
+    const path = args.path as string;
+    const full = safePath(workspaceDir, path);
+    if (!full) return { error: `Path escapes workspace: ${path}`, denied: true };
+    if (!existsSync(full)) return { error: `File not found: ${path}` };
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      const entries = readdirSync(full);
+      if (entries.length > 0) {
+        return { error: `Refusing to delete non-empty directory: ${path} (${entries.length} entries)` };
+      }
+      rmSync(full, { recursive: false });
+      return { path, deleted: true, directory: true };
+    }
+    rmSync(full);
+    return { path, deleted: true, directory: false };
   };
 }
 

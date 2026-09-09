@@ -18,11 +18,11 @@ export class LoopDetector {
     }
     if (this.calls.length >= this.windowSize) {
       const last = this.calls.slice(-this.windowSize);
-      const progress = new Set(["write_file", "edit_file", "shell"]);
+      const progress = new Set(["write_file", "modified_file", "delete_file", "shell"]);
       if (!last.some((c) => progress.has(c.name))) {
         return {
           detected: true,
-          reason: `Tidak ada write/shell dalam ${this.windowSize} panggilan terakhir. Wajib panggil write_file / edit_file SEKARANG.`,
+          reason: `Tidak ada write/shell dalam ${this.windowSize} panggilan terakhir. Wajib panggil write_file / modified_file SEKARANG.`,
         };
       }
     }
