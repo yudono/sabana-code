@@ -2,159 +2,157 @@
 
 ![sabana-code TUI](Screenshot.png)
 
-Coding agent CLI + TUI ala claude-code / opencode: **single agent loop** dengan tool calling
-filesystem, terminal, dan pencarian internet. Bisa dijalankan dari direktori mana pun —
-session, kredensial, log, dan database tersimpan global di `~/sabana-code/`.
+A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a **single agent loop** with tool calling for filesystem, terminal, and internet search. Runs from any directory — sessions, credentials, logs, and database are stored globally in `~/sabana-code/`.
 
-## Fitur
+## Features
 
-- **Single agent process** — satu loop otonom: pahami perintah → panggil tools → verifikasi → selesai.
-  Tidak ada orkestrasi multi-agent yang rumit; satu agen mengerjakan satu tugas sampai tuntas.
-- **Tool calling filesystem** — `read_file` (baca + nomor baris), `write_file` (tulis/timpa),
-  `modified_file` (edit terarah + keluaran unified diff `+`/`-`), `delete_file` (hapus file/dir kosong),
-  plus `list_directory`, `glob`, `grep` untuk eksplorasi. Semua path di-sandbox ke workspace.
-- **Tool calling terminal** — `shell` untuk perintah build/test/git/dll, dengan pengaman perintah
-  gantung (dev server, `sleep`, background `&` otomatis diblokir).
-- **Tool calling internet** — `web_search` (via Tavily, fallback DuckDuckGo) dan `web_fetch`
-  untuk baca dokumentasi/API saat coding.
-- **TUI interaktif fullscreen** — chat, input prompt, live tool-calling dengan ringkasan
-  per langkah (`read_file App.tsx`, `edit_file App.tsx (+11, -2)`, `$ npm test → exit 0`).
-  Klik baris tool untuk membuka **pratinjau fullscreen** (syntax highlighting) —
-  `Esc` untuk keluar. `↑`/`↓` scroll riwayat, klik mouse didukung.
-- **Izin terminal per-session** — perintah berisiko (`rm`, `mkdir`, `npm`, …) meminta
-  persetujuan inline: `[y]` sekali, `[a]` semua perintah serupa sekaligus
-  (mis. sekali setuju `npm`, maka `npm install`/`npm run build`/`npm test` ikut lolos),
-  `[n]` tolak. Perintah aman (`cd`, `ls`, `cat`, …) dan semua operasi file
-  langsung jalan tanpa prompt. Keputusan tersimpan di file session.
-- **Session per project** — tiap folder proyek otomatis terdaftar di `~/sabana-code/projects/`,
-  tiap sesi tersimpan sebagai UUID di `~/sabana-code/sessions/` dan bisa di-resume
-  kapan pun (`sabana-code -r <id>`).
-- **Sub-agent kustom** — profil AI di `~/sabana-code/agents/*.md` (mis. reviewer, security auditor)
-  untuk delegasi tugas spesifik.
+- **Single agent process** — one autonomous loop: understand request → call tools → verify → done.
+  No complex multi-agent orchestration; one agent handles one task from start to finish.
+- **Filesystem tools** — `read_file` (read with line numbers), `write_file` (write/overwrite),
+  `modified_file` (targeted edits + unified diff output `+`/`-`), `delete_file` (remove file/empty dir),
+  plus `list_directory`, `glob`, `grep` for exploration. All paths are sandboxed to the workspace.
+- **Terminal tools** — `shell` for build/test/git commands, with hanging process protection
+  (dev servers, `sleep`, background `&` are automatically blocked).
+- **Internet tools** — `web_search` (via Tavily, fallback DuckDuckGo) and `web_fetch`
+  for reading documentation and APIs while coding.
+- **Interactive fullscreen TUI** — chat, prompt input, live tool-calling with step-by-step summaries
+  (`read_file App.tsx`, `edit_file App.tsx (+11, -2)`, `$ npm test → exit 0`).
+  Click a tool call to open a **fullscreen preview** (syntax highlighting) —
+  press `Esc` to close. `↑`/`↓` to scroll history, mouse clicks supported.
+- **Per-session shell approval** — risky commands (`rm`, `mkdir`, `npm`, …) require
+  inline confirmation: `[y]` once, `[a]` all similar commands at once
+  (e.g., approve `npm` once → `npm install`/`npm run build`/`npm test` all pass),
+  `[n]` deny. Safe commands (`cd`, `ls`, `cat`, …) and all file operations
+  run without prompts. Decisions are saved per session.
+- **Session per project** — each project folder is automatically registered in `~/sabana-code/projects/`,
+  each session is stored as a UUID in `~/sabana-code/sessions/` and can be resumed
+  anytime (`sabana-code -r <id>`).
+- **Custom sub-agents** — AI profiles in `~/sabana-code/agents/*.md` (e.g., reviewer, security auditor)
+  for delegating specific tasks.
 - **Multi-provider & multi-model** — OpenAI, Anthropic, Google Gemini, Groq, Together,
-  OpenRouter, Perplexity, Ollama lokal, atau URL kustom yang OpenAI-compatible.
-  Ganti kapan pun tanpa kehilangan riwayat; daftar model diambil live dari `/v1/models`.
-- **Compact konteks otomatis** — saat konteks menyentuh >80% window, riwayat lama
-  diringkas otomatis jadi satu pesan; bisa juga manual via `/compact`.
-- **Guardrails** — blokir prompt injection, XSS, private key, prompt raksasa; secret di output
-  tool disensor sebelum masuk konteks LLM.
-- **Rate limiting** — batas request LLM per menit (default 60, bisa diubah) + retry backoff 429/5xx.
+  OpenRouter, Perplexity, local Ollama, or any OpenAI-compatible custom URL.
+  Switch anytime without losing history; model list is fetched live from `/v1/models`.
+- **Auto-compact context** — when context hits >80% of the window, older messages
+  are automatically summarized into one; can also be triggered manually via `/compact`.
+- **Guardrails** — blocks prompt injection, XSS, private keys, oversized prompts; secrets in tool
+  output are redacted before reaching the LLM context.
+- **Rate limiting** — LLM requests per minute cap (default 60, configurable) + exponential backoff on 429/5xx.
 
-## Prasyarat
+## Requirements
 
-- Node.js 22+ (direkomendasikan 24)
-- API key salah satu provider (atau Ollama lokal — gratis, tanpa key)
+- Node.js 22+ (24 recommended)
+- API key for one provider (or local Ollama — free, no key needed)
 
-## Cara menjalankan
+## Getting Started
 
 ```bash
-# Install langsung dari npm (disarankan)
+# Install globally from npm (recommended)
 npm install -g sabana-code
 
-# Setup pertama (membuat ~/sabana-code/ + settings.json + pilih provider)
+# First-time setup (creates ~/sabana-code/ + settings.json + pick provider)
 sabana-code setup
 
-# Mulai coding, mis. di folder proyekmu
+# Start coding, e.g. in your project folder
 cd ./my-project
 sabana-code
 ```
 
-Saat pertama dijalankan, `sabana-code` menginisialisasi home global:
+On first run, `sabana-code` initializes the global home:
 
 ```
 ~/sabana-code/
-  settings.json        konfigurasi + kredensial provider utama
-  sessions/<uuid>.json riwayat chat + konteks tiap sesi
-  projects/<hash>/     metadata tiap folder proyek (satu proyek bisa banyak sesi)
-  agents/*.md          profil sub-agent kustom (reviewer, security, …)
-  sabana.db            sqlite: index sesi, pemakaian token
-  logs/YYYY-MM-DD.log  log aktivitas harian
+  settings.json        config + provider credentials
+  sessions/<uuid>.json chat history + context per session
+  projects/<hash>/     metadata per project folder (one project can have many sessions)
+  agents/*.md          custom sub-agent profiles (reviewer, security, …)
+  sabana.db            sqlite: session index, token usage
+  logs/YYYY-MM-DD.log  daily activity logs
 ```
 
-### Tanpa install global
+### Without global install
 
 ```bash
 npx -y sabana-code@latest --provider ollama
 ```
 
-## Penggunaan CLI
+## CLI Usage
 
 ```bash
-sabana-code "buatkan web hello world dengan vite + tailwind"
-sabana-code "perbaiki bug login di src/auth.ts" -C ./my-project --auto-approve
-sabana-code --provider ollama --model qwen2.5-coder "refactor fungsi ini"
+sabana-code "create a hello world web app with vite + tailwind"
+sabana-code "fix the login bug in src/auth.ts" -C ./my-project --auto-approve
+sabana-code --provider ollama --model qwen2.5-coder "refactor this function"
 
-sabana-code setup                  # ulang setup provider
-sabana-code auth login openai      # simpan key provider tambahan
-sabana-code auth list              # lihat sumber kredensial (env/global/-)
+sabana-code setup                  # re-run provider setup
+sabana-code auth login openai      # save additional provider key
+sabana-code auth list              # view credential sources (env/global/-)
 sabana-code auth logout openai
 ```
 
-Opsi: `-C/--workspace`, `--model`, `--provider openai|anthropic|google|ollama|custom|mock`,
+Options: `-C/--workspace`, `--model`, `--provider openai|anthropic|google|ollama|custom|mock`,
 `--max-steps` (default 40), `--auto-approve`.
 
-## Penggunaan TUI
+## TUI Usage
 
 ```bash
 sabana-code -C ./my-project
-sabana-code --continue         # lanjutkan sesi terakhir
-sabana-code -r 3fa4ea9f        # lanjutkan sesi (boleh prefix UUID)
+sabana-code --continue         # continue last session
+sabana-code -r 3fa4ea9f        # resume session (UUID prefix OK)
 ```
 
-Setiap keluar TUI (`Ctrl+C` saat idle atau `/quit`), terminal menampilkan
-perintah resume sesi tersebut, mis. `sabana-code -r 3fa4ea9f -C ./my-project`.
+When exiting TUI (`Ctrl+C` while idle or `/quit`), the terminal displays
+the resume command, e.g. `sabana-code -r 3fa4ea9f -C ./my-project`.
 
-Perintah dalam TUI:
+TUI commands:
 
-| Perintah | Fungsi |
+| Command | Description |
 |---|---|
-| `/help` | daftar perintah |
-| `/new`, `/sessions`, `/resume <id\|nomor>` | kelola sesi |
-| `/projects` | daftar proyek + sesi per proyek |
-| `/model [nama]`, `/provider [nama]` | lihat/ganti model & provider (+ uji koneksi) |
-| `/models [filter\|nomor]` | daftar model live dari provider + pilih (atau manual via `/model`) |
-| `/providers [use\|login ...]` | kelola multi-provider yang terkonek |
-| `/compact` | padatkan konteks sekarang (otomatis saat >80% window) |
-| `/login <provider> <key>`, `/logout` | kelola kredensial global |
-| `/agents`, `/agent <nama> <tugas>` | lihat & delegasikan ke sub-agent |
-| `/context` | pemakaian context-window model aktif |
-| `/tools`, `/clear`, `/quit` | daftar tools, bersihkan layar, keluar |
+| `/help` | list commands |
+| `/new`, `/sessions`, `/resume <id\|number>` | manage sessions |
+| `/projects` | list projects + sessions per project |
+| `/model [name]`, `/provider [name]` | view/switch model & provider (+ connection test) |
+| `/models [filter\|number]` | live model list from provider + select (or manual via `/model`) |
+| `/providers [use\|login ...]` | manage connected multi-providers |
+| `/compact` | compact current context (auto at >80% window) |
+| `/login <provider> <key>`, `/logout` | manage global credentials |
+| `/agents`, `/agent <name> <task>` | view & delegate to sub-agent |
+| `/context` | active model context window usage |
+| `/tools`, `/clear`, `/quit` | list tools, clear screen, exit |
 
-`Ctrl+C` membatalkan turn yang berjalan; `Ctrl+C` lagi untuk keluar (sesi otomatis tersimpan).
-`↑`/`↓` scroll riwayat chat (3 baris), `PgUp`/`PgDn` satu layar; kirim pesan baru untuk kembali ke bawah.
+`Ctrl+C` cancels the running turn; `Ctrl+C` again to exit (session auto-saved).
+`↑`/`↓` scrolls chat history (3 lines), `PgUp`/`PgDn` scrolls one screen; send a new message to jump back to bottom.
 
 ### Multi-provider & multi-model
 
-Provider yang didukung: `openai`, `anthropic`, `google`, `groq`, `together`,
+Supported providers: `openai`, `anthropic`, `google`, `groq`, `together`,
 `openrouter`, `perplexity`, `ollama`, `custom`, `mock`.
 
 ```text
-/providers                 # daftar + status koneksi tiap provider
+/providers                 # list + connection status per provider
 /providers login groq <key>
-/providers use groq        # pindah provider (atau /provider groq)
-/models                    # daftar model live dari /v1/models provider aktif
-/models llama              # saring
-/models 2                  # pilih nomor 2 (atau /model <nama> manual)
+/providers use groq        # switch provider (or /provider groq)
+/models                    # live model list from active provider's /v1/models
+/models llama              # filter
+/models 2                  # select number 2 (or manual via /model <name>)
 ```
 
-`/models` mengambil langsung dari endpoint provider (`GET {baseUrl}/models`,
-`GET /api/tags` untuk Ollama), menyaring ID non-chat (audio/gambar/embedding),
-dan menampilkan maksimal 40. Anthropic tak punya daftar publik → dipakai katalog
-bawaan. Daftar yang tampil bisa langsung dipilih pakai nomor.
+`/models` fetches directly from the provider endpoint (`GET {baseUrl}/models`,
+`GET /api/tags` for Ollama), filters out non-chat IDs (audio/image/embedding),
+and displays up to 40. Anthropic has no public list → uses built-in catalog.
+The displayed list can be selected directly by number.
 
-### Compact konteks
+### Context compaction
 
-- `/compact` — ringkas riwayat jadi satu pesan (N pesan terakhir dipertahankan utuh).
-- **Auto-compact (default)**: tiap turn yang menyentuh **>80% context window**
-  otomatis dipadatkan sekali sebelum lanjut, jadi sesi panjang tidak mentok.
+- `/compact` — summarize history into one message (last N messages preserved intact).
+- **Auto-compact (default)**: any turn that hits **>80% context window**
+  is automatically compacted once before continuing, so long sessions don't hit the limit.
 
-## Konfigurasi (`~/sabana-code/settings.json`)
+## Configuration (`~/sabana-code/settings.json`)
 
 ```json
 {
   "env": {
     "SABANA_PROVIDER": "openai",
-    "SABANA_BASE_URL": "https://providerkamu.com",
+    "SABANA_BASE_URL": "https://your-provider.com",
     "SABANA_API_KEY": "sk-...",
     "SABANA_MODEL": "gpt-4o-mini",
     "SABANA_MAX_TOKEN": "8192",
@@ -164,64 +162,64 @@ bawaan. Daftar yang tampil bisa langsung dipilih pakai nomor.
 }
 ```
 
-| Key | Fungsi |
+| Key | Description |
 |---|---|
 | `SABANA_PROVIDER` | `openai` \| `anthropic` \| `google` \| `ollama` \| `custom` \| `mock` |
-| `SABANA_BASE_URL` | base URL OpenAI-compatible (wajib diisi untuk `custom`) |
-| `SABANA_API_KEY` | API key provider utama |
-| `SABANA_MODEL` | model default |
-| `SABANA_MAX_TOKEN` | batas token output per request |
-| `SABANA_RPM` | **rate limit**: maks request LLM per menit (`<=0` = tanpa batas) |
-| `TAVILY_API_KEY` | opsional, untuk `web_search` berkualitas (tanpanya pakai DuckDuckGo) |
+| `SABANA_BASE_URL` | OpenAI-compatible base URL (required for `custom`) |
+| `SABANA_API_KEY` | main provider API key |
+| `SABANA_MODEL` | default model |
+| `SABANA_MAX_TOKEN` | max output tokens per request |
+| `SABANA_RPM` | **rate limit**: max LLM requests per minute (`<=0` = unlimited) |
+| `TAVILY_API_KEY` | optional, for high-quality `web_search` (falls back to DuckDuckGo without it) |
 
-Environment variable asli selalu menang atas `settings.json`, jadi nilai di atas bisa
-di-override per-perintah, mis. `SABANA_MODEL=gpt-4o sabana-code`.
+Original environment variables always take precedence over `settings.json`, so values above can
+be overridden per-command, e.g. `SABANA_MODEL=gpt-4o sabana-code`.
 
-## Keamanan: guardrails & rate limiting
+## Security: guardrails & rate limiting
 
-- **Input**: prompt yang mengandung upaya *ignore instructions*, *reveal system prompt*,
-  private key, tag `<script>`, atau melebihi 50.000 karakter langsung diblokir.
-- **Output**: API key/token/private key yang terbaca tool dari file/log disensor
-  (`[REDACTED_*]`) sebelum diteruskan ke LLM.
-- **Rate limit**: tiap turn menunggu slot (default 60 req/menit, diatur via `SABANA_RPM`);
-  error 429/kuota/5xx/timeout di-retry otomatis dengan backoff eksponensial.
-- **Sandbox path**: tool filesystem hanya boleh mengakses workspace (`safePath`);
-  perintah `shell` yang menggantung loop (dev server, `sleep`, background `&`) diblokir.
-- Izin tool: file (baca/tulis/edit/list) dan shell read-only (`ls`, `cd`,
-  `cat`, `echo`, …) bebas izin. Hanya eksekusi berpotensi berbahaya (`rm`,
-  `mkdir`, `npm`, `git`, …) yang meminta persetujuan inline — `[y]` sekali,
-  `[a]` semua perintah serupa (satu entity, mis. semua `npm …`), `[n]` tolak.
-  Keputusan `allow all`/`deny` tersimpan di file session
-  (`~/sabana-code/sessions/<uuid>.json`), jadi berlaku selama session itu saja;
-  session baru mengulang persetujuan dari nol.
+- **Input**: prompts containing *ignore instructions*, *reveal system prompt*,
+  private keys, `<script>` tags, or exceeding 50,000 characters are blocked immediately.
+- **Output**: API keys/tokens/private keys found by tools in files/logs are redacted
+  (`[REDACTED_*]`) before being passed to the LLM.
+- **Rate limit**: each turn waits for a slot (default 60 req/min, configurable via `SABANA_RPM`);
+  429/quota/5xx/timeout errors are retried automatically with exponential backoff.
+- **Sandbox path**: filesystem tools can only access the workspace (`safePath`);
+  `shell` commands that hang the loop (dev servers, `sleep`, background `&`) are blocked.
+- Tool permissions: file (read/write/edit/list) and read-only shell (`ls`, `cd`,
+  `cat`, `echo`, …) run without prompts. Only potentially dangerous execution (`rm`,
+  `mkdir`, `npm`, `git`, …) requires inline approval — `[y]` once,
+  `[a]` all similar commands (e.g., approve `npm` once → all `npm …` pass),
+  `[n]` deny. `allow all`/`deny` decisions are saved in the session file
+  (`~/sabana-code/sessions/<uuid>.json`), so they persist for that session only;
+  new sessions start with fresh approvals.
 
-## Untuk developer
+## For Developers
 
 ```bash
-npm test          # 139 unit test (node:test, tanpa framework tambahan)
-npm run benchmark # benchmark ala SWE-bench/Terminal-Bench, mock deterministik
+npm test          # 168 unit tests (node:test, no additional framework)
+npm run benchmark # SWE-bench / Terminal-Bench style benchmark, deterministic mock
 npm run typecheck # tsc --noEmit
 ```
 
-Struktur kode:
+Code structure:
 
 ```
 src/
-  agent.ts        loop single-agent (chatTurn multi-turn + event stream)
+  agent.ts        single-agent loop (chatTurn multi-turn + event stream)
   index.ts        CLI  •  tui/  TUI (Ink)
-  llm/            provider OpenAI/Anthropic/Google/Ollama/mock + katalog model
+  llm/            OpenAI/Anthropic/Google/Ollama/mock provider + model catalog
   tools/          filesystem, terminal, web, registry, executor, sandbox, summary
-  session/        store sesi + estimasi/trim context-window per model
-  projects.ts     registry ~/sabana-code/projects
-  subagents.ts    loader + runner ~/sabana-code/agents
-  settings.ts     settings.json  •  setup.ts  wizard  •  auth.ts  kredensial
-  home.ts         path ~/sabana-code  •  db.ts  sqlite
+  session/        session store + context-window estimation/trimming per model
+  projects.ts     ~/sabana-code/projects registry
+  subagents.ts    ~/sabana-code/agents loader + runner
+  settings.ts     settings.json  •  setup.ts  wizard  •  auth.ts  credentials
+  home.ts         ~/sabana-code path  •  db.ts  sqlite
   utils/          guardrails, ratelimit, loop-detector, permissions, logger
-agents/           template profil sub-agent bawaan
+agents/           default sub-agent profile templates
 benchmark/        harness + tasks (create-config, fix-bug, rename-refactor, …)
-tests/            unit test per modul
+tests/            per-module unit tests
 ```
 
-Logika agent diadaptasi dari `sabana-dev` (`apps/api/src/agents/`): orchestrator loop,
+Agent logic adapted from `sabana-dev` (`apps/api/src/agents/`): orchestrator loop,
 tool registry/executor, provider SSE/tool-call parsing, loop-detector, permission engine,
-dan guardrails — disederhanakan tanpa Redis/compactor/billing.
+and guardrails — simplified without Redis/compactor/billing.
