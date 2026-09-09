@@ -1,11 +1,7 @@
-// ─── Kredensial: env asli menang, lalu ~/sabana-code/settings.json ───
-// settings.json menyimpan provider utama di `env` + provider tambahan di
-// `providers`, sehingga agent bisa jalan dari direktori mana pun tanpa .env.
-import {
-  SUPPORTED_PROVIDERS,
-  loadSettings,
-  saveSettings,
-} from "./settings.js";
+// ─── Kredensial: resolve per provider dari settings.json + env ───
+// Settings.json sekarang punya { default_provider, default_model, providers: { [name]: { apiKey, baseUrl, ... } } }
+// Tiap provider punya config sendiri, tidak saling tumpuk.
+import { loadSettings, saveSettings } from "./settings.js";
 import { resolveProvider } from "./llm/models.js";
 
 export interface ResolvedCreds {
@@ -19,54 +15,50 @@ export function resolveCredentials(provider: string): ResolvedCreds {
   const raw = resolveProvider(provider, { settings: false });
   if (!raw.needsKey) return { apiKey: raw.apiKey, baseUrl: raw.baseUrl, source: "env" };
   if (raw.apiKey) return { apiKey: raw.apiKey, baseUrl: raw.baseUrl, source: "env" };
-  // 2. settings.json: provider utama, lalu providers tambahan → "global"
-  const withSettings = resolveProvider(provider);
+  // 2. settings.json: cek providers[provider]
   const s = loadSettings();
-  const main = (s.env.SABANA_PROVIDER || "").toLowerCase() === provider && s.env.SABANA_API_KEY;
-  const extra = s.providers?.[provider];
-  if (main) {
-    return { apiKey: s.env.SABANA_API_KEY, baseUrl: withSettings.baseUrl, source: "global" };
+  const providerCfg = s.providers[provider];
+  if (providerCfg?.apiKey) {
+    return { apiKey: providerCfg.apiKey, baseUrl: providerCfg.baseUrl || raw.baseUrl, source: "global" };
   }
-  if (extra?.apiKey) {
-    return { apiKey: extra.apiKey, baseUrl: extra.baseUrl || withSettings.baseUrl, source: "global" };
-  }
-  return { apiKey: "", baseUrl: withSettings.baseUrl, source: "none" };
+  return { apiKey: "", baseUrl: raw.baseUrl, source: "none" };
 }
 
 /** Simpan key provider ke settings.json (global). */
 export function saveCredential(provider: string, apiKey: string, baseUrl = ""): void {
   const s = loadSettings();
-  const main = (s.env.SABANA_PROVIDER || "").toLowerCase() === provider;
-  if (main) {
-    s.env.SABANA_API_KEY = apiKey;
-    if (baseUrl) s.env.SABANA_BASE_URL = baseUrl;
-  }
-  s.providers = { ...(s.providers || {}), [provider]: { apiKey, baseUrl } };
+  const existing = s.providers[provider];
+  const preset = { baseUrl: "", model: "", maxTokens: 8192 };
+  // Resolve default baseUrl from resolveProvider
+  const resolved = resolveProvider(provider);
+  s.providers[provider] = {
+    baseUrl: baseUrl || existing?.baseUrl || resolved.baseUrl,
+    apiKey,
+    model: existing?.model || preset.model,
+    maxTokens: existing?.maxTokens || preset.maxTokens,
+  };
   saveSettings(s);
 }
 
 export function removeCredential(provider: string): boolean {
   const s = loadSettings();
-  let removed = false;
-  if (s.providers?.[provider]) {
-    delete s.providers[provider];
-    removed = true;
-  }
-  if ((s.env.SABANA_PROVIDER || "").toLowerCase() === provider && s.env.SABANA_API_KEY) {
-    s.env.SABANA_API_KEY = "";
-    removed = true;
-  }
-  if (removed) saveSettings(s);
-  return removed;
+  // Cannot remove default_provider
+  if (provider === s.default_provider) return false;
+  if (!s.providers[provider]) return false;
+  delete s.providers[provider];
+  saveSettings(s);
+  return true;
 }
 
 export function credentialSummary(): Array<{ provider: string; source: string }> {
-  return SUPPORTED_PROVIDERS.filter((p) => p !== "mock").map((p) => ({
+  const s = loadSettings();
+  const providers = Object.keys(s.providers).filter((p) => p !== "mock");
+  return providers.map((p) => ({
     provider: p,
-    source: resolveCredentials(p).source,
+    source: s.providers[p].apiKey ? "global" : "none",
   }));
 }
 
 export function listStoredProviders(): string[] {
-  return Object.keys(loadSettings().providers || {});
+  return Object.keys(loadSettings().providers);
 }

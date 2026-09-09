@@ -7,7 +7,7 @@ import { render } from "ink";
 import { App } from "./App.js";
 import { createSession, lastSession, loadSession, saveSession } from "../session/store.js";
 import { resolveCredentials } from "../auth.js";
-import { initEnvFromSettings } from "../settings.js";
+import { initEnvFromSettings, loadSettings } from "../settings.js";
 import { ensureInitialized } from "../setup.js";
 import { flog } from "../utils/filelog.js";
 import { setQuiet } from "../utils/logger.js";
@@ -103,8 +103,9 @@ export async function launchTui(args: TuiArgs): Promise<void> {
   }
   initEnvFromSettings();
 
-  const model = args.modelFlag || process.env.SABANA_MODEL || settings.env.SABANA_MODEL || "gpt-4o-mini";
-  const provider = args.providerFlag || process.env.SABANA_PROVIDER || settings.env.SABANA_PROVIDER || "openai";
+  const s = loadSettings();
+  const model = args.modelFlag || process.env.SABANA_MODEL || s.default_model || "gpt-4o-mini";
+  const provider = args.providerFlag || process.env.SABANA_PROVIDER || s.default_provider || "openai";
 
   const creds = resolveCredentials(provider);
   if (!creds.apiKey && provider !== "ollama" && provider !== "mock") {

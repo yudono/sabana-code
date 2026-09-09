@@ -1,7 +1,6 @@
 // ─── settings.json di ~/sabana-code/ — pengganti .env ───
 // Dibuat saat pertama kali dijalankan (beserta sessions/, logs/, sabana.db).
-// Bentuk file persis seperti yang diminta user:
-//   { "env": { "SABANA_PROVIDER": "openai", "SABANA_BASE_URL": "...", ... } }
+// Struktur baru: default_provider + default_model + providers { [name]: { baseUrl, apiKey, model, maxTokens } }
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureHome, sabanaHome } from "./home.js";
@@ -78,15 +77,18 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
 
 export const SUPPORTED_PROVIDERS = Object.keys(PROVIDER_PRESETS);
 
-export interface ProviderCreds {
-  apiKey: string;
+export interface ProviderConfig {
   baseUrl: string;
+  apiKey: string;
+  model: string;
+  maxTokens: number;
 }
 
 export interface SettingsFile {
-  env: Record<string, string>;
-  /** Kredensial provider tambahan selain provider utama. */
-  providers?: Record<string, ProviderCreds>;
+  default_provider: string;
+  default_model: string;
+  providers: Record<string, ProviderConfig>;
+  tavily_api_key: string;
 }
 
 export function settingsPath(): string {
@@ -94,17 +96,18 @@ export function settingsPath(): string {
 }
 
 export function defaultSettings(): SettingsFile {
-  const p = PROVIDER_PRESETS.openai;
   return {
-    env: {
-      SABANA_PROVIDER: "openai",
-      SABANA_BASE_URL: p.baseUrl,
-      SABANA_API_KEY: "",
-      SABANA_MODEL: p.model,
-      SABANA_MAX_TOKEN: "8192",
-      SABANA_RPM: "60",
-      TAVILY_API_KEY: "",
+    default_provider: "openai",
+    default_model: "gpt-4o-mini",
+    providers: {
+      openai: {
+        baseUrl: PROVIDER_PRESETS.openai.baseUrl,
+        apiKey: "",
+        model: PROVIDER_PRESETS.openai.model,
+        maxTokens: 8192,
+      },
     },
+    tavily_api_key: "",
   };
 }
 
@@ -113,15 +116,55 @@ export function loadSettings(): SettingsFile {
   const path = settingsPath();
   if (!existsSync(path)) return defaultSettings();
   try {
-    const raw = JSON.parse(readFileSync(path, "utf-8")) as Partial<SettingsFile>;
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    // Migrate old format: env.SABANA_PROVIDER → default_provider
+    if (raw.env && typeof raw.env === "object" && !raw.default_provider) {
+      return migrateOldSettings(raw as { env: Record<string, string>; providers?: Record<string, { apiKey: string; baseUrl: string }> });
+    }
     const merged = defaultSettings();
     return {
-      env: { ...merged.env, ...(raw.env || {}) },
-      ...(raw.providers ? { providers: raw.providers } : {}),
+      default_provider: (raw.default_provider as string) || merged.default_provider,
+      default_model: (raw.default_model as string) || merged.default_model,
+      providers: { ...merged.providers, ...(raw.providers as Record<string, ProviderConfig> || {}) },
+      tavily_api_key: (raw.tavily_api_key as string) || "",
     };
   } catch {
     return defaultSettings();
   }
+}
+
+/** Migrate old format: { env: { SABANA_PROVIDER, SABANA_BASE_URL, SABANA_API_KEY, SABANA_MODEL, ... } }
+ *  → new format: { default_provider, default_model, providers: { ... }, tavily_api_key } */
+function migrateOldSettings(old: { env: Record<string, string>; providers?: Record<string, { apiKey: string; baseUrl: string }> }): SettingsFile {
+  const env = old.env;
+  const provider = (env.SABANA_PROVIDER || "openai").toLowerCase();
+  const preset = PROVIDER_PRESETS[provider];
+  const s = defaultSettings();
+  s.default_provider = provider;
+  s.default_model = env.SABANA_MODEL || preset?.model || "";
+  s.providers[provider] = {
+    baseUrl: env.SABANA_BASE_URL || preset?.baseUrl || "",
+    apiKey: env.SABANA_API_KEY || "",
+    model: env.SABANA_MODEL || preset?.model || "",
+    maxTokens: parseInt(env.SABANA_MAX_TOKEN || "8192", 10) || 8192,
+  };
+  // Migrate old providers extra
+  if (old.providers) {
+    for (const [k, v] of Object.entries(old.providers)) {
+      if (k !== provider && v.apiKey) {
+        const p = PROVIDER_PRESETS[k];
+        s.providers[k] = {
+          baseUrl: v.baseUrl || p?.baseUrl || "",
+          apiKey: v.apiKey,
+          model: p?.model || "",
+          maxTokens: 8192,
+        };
+      }
+    }
+  }
+  s.tavily_api_key = env.TAVILY_API_KEY || "";
+  saveSettings(s);
+  return s;
 }
 
 export function saveSettings(s: SettingsFile): void {
@@ -129,34 +172,75 @@ export function saveSettings(s: SettingsFile): void {
   writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + "\n");
 }
 
-export function getSettingsEnv(): Record<string, string> {
-  return loadSettings().env || {};
+/** Get active provider config (from settings). */
+export function getActiveProviderConfig(): ProviderConfig | null {
+  const s = loadSettings();
+  return s.providers[s.default_provider] || null;
 }
 
-/** Salin settings ke process.env bila belum di-set (env asli selalu menang). */
+/** Get config for a specific provider. */
+export function getProviderConfig(name: string): ProviderConfig | null {
+  const s = loadSettings();
+  return s.providers[name] || null;
+}
+
+/** Update default provider + model (ensures model belongs to provider). */
+export function setDefaultProvider(provider: string, model?: string): void {
+  const s = loadSettings();
+  const cfg = s.providers[provider];
+  if (!cfg) return;
+  s.default_provider = provider;
+  if (model) s.default_model = model;
+  else s.default_model = cfg.model;
+  saveSettings(s);
+}
+
+/** Upsert a provider config. */
+export function setProviderConfig(name: string, config: ProviderConfig): void {
+  const s = loadSettings();
+  s.providers[name] = config;
+  saveSettings(s);
+}
+
+/** Remove a provider config. Cannot remove default_provider. */
+export function removeProvider(name: string): boolean {
+  const s = loadSettings();
+  if (name === s.default_provider) return false;
+  if (!s.providers[name]) return false;
+  delete s.providers[name];
+  saveSettings(s);
+  return true;
+}
+
+/** List all stored provider names. */
+export function listStoredProviders(): string[] {
+  return Object.keys(loadSettings().providers);
+}
+
+/** Salin tavily_api_key ke process.env bila belum di-set. */
 export function initEnvFromSettings(): SettingsFile {
   const s = loadSettings();
-  for (const [k, v] of Object.entries(s.env || {})) {
-    if (v && !process.env[k]) process.env[k] = v;
-  }
+  if (s.tavily_api_key && !process.env.TAVILY_API_KEY) process.env.TAVILY_API_KEY = s.tavily_api_key;
   return s;
 }
 
 /** Batas request LLM per menit (default 60; <=0 = tanpa batas). */
 export function rpmFromSettings(): number {
-  const raw = process.env.SABANA_RPM || getSettingsEnv().SABANA_RPM || "60";
+  const raw = process.env.SABANA_RPM || "60";
   const n = parseInt(raw, 10);
   return isNaN(n) ? 60 : n;
 }
 
-/** Lengkap bila provider jelas dan (tak butuh key / key sudah ada). */
+/** Check if settings are complete: default_provider exists + has apiKey (or doesn't need one) + has model. */
 export function isSettingsComplete(s?: SettingsFile): boolean {
   const cfg = s || loadSettings();
-  const provider = (cfg.env.SABANA_PROVIDER || "").toLowerCase();
-  const preset = PROVIDER_PRESETS[provider];
+  const providerName = cfg.default_provider;
+  const preset = PROVIDER_PRESETS[providerName];
   if (!preset) return false;
-  if (provider === "custom" && !cfg.env.SABANA_BASE_URL) return false;
-  if (preset.needsKey && !cfg.env.SABANA_API_KEY) return false;
-  if (!cfg.env.SABANA_MODEL && provider !== "mock") return false;
+  const providerCfg = cfg.providers[providerName];
+  if (!providerCfg) return false;
+  if (providerName === "custom" && !providerCfg.baseUrl) return false;
+  if (preset.needsKey && !providerCfg.apiKey) return false;
+  if (!providerCfg.model && providerName !== "mock") return false;
   return true;
 }

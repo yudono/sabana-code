@@ -1,7 +1,8 @@
 // ─── Katalog model + context window ───
 // Satu session bisa terus jalan sampai batas context window model yang dipakai.
 // Tiap model punya batas berbeda → TUI menampilkan pemakaian + auto-trim.
-import { getSettingsEnv } from "../settings.js";
+// Sekarang membaca config dari settings.providers[provider] (bukan env.SABANA_*).
+import { loadSettings } from "../settings.js";
 
 export interface ModelInfo {
   id: string;
@@ -94,79 +95,98 @@ export interface ProviderCreds {
   needsKey: boolean;
 }
 
-/** Kredensial + baseURL per provider: env asli dulu, lalu settings.json (bila provider-nya cocok).
- *  Opsi settings:false → hanya env asli (dipakai deteksi sumber "env" vs "global"). */
+/**
+ * Resolve kredensial + baseUrl per provider.
+ * Prioritas: 1) env asli, 2) settings.providers[name], 3) preset defaults.
+ * Opsi settings:false → hanya env asli (untuk deteksi sumber "env" vs "global").
+ */
 export function resolveProvider(provider: string, opts?: { settings?: boolean }): ProviderCreds {
   const useSettings = opts?.settings !== false;
   const pick = (...names: string[]): string => {
     for (const n of names) if (process.env[n]) return process.env[n];
-    if (!useSettings) return "";
-    const s = getSettingsEnv();
-    if ((s.SABANA_PROVIDER || "").toLowerCase() === provider) {
-      for (const n of names) if (s[n]) return s[n];
-    }
     return "";
   };
+
+  // 1. Env asli (always wins)
   if (provider === "anthropic") {
-    return {
-      baseUrl: pick("ANTHROPIC_BASEURL", "SABANA_BASE_URL") || "https://api.anthropic.com",
-      apiKey: pick("ANTHROPIC_KEY", "SABANA_API_KEY", "OPENAI_KEY"),
-      needsKey: true,
-    };
+    const key = pick("ANTHROPIC_KEY", "SABANA_API_KEY", "OPENAI_KEY");
+    if (key) return { baseUrl: pick("ANTHROPIC_BASEURL", "SABANA_BASE_URL") || "https://api.anthropic.com", apiKey: key, needsKey: true };
   }
   if (provider === "google") {
-    return {
-      baseUrl:
-        pick("GOOGLE_BASEURL", "SABANA_BASE_URL") ||
-        "https://generativelanguage.googleapis.com/v1beta/openai",
-      apiKey: pick("GOOGLE_API_KEY", "GEMINI_API_KEY", "SABANA_API_KEY"),
-      needsKey: true,
-    };
+    const key = pick("GOOGLE_API_KEY", "GEMINI_API_KEY", "SABANA_API_KEY");
+    if (key) return { baseUrl: pick("GOOGLE_BASEURL", "SABANA_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: key, needsKey: true };
   }
-  // Provider OpenAI-compatible lain: Groq, Together, OpenRouter, Perplexity.
-  const COMPAT_DEFAULTS: Record<string, { base: string; keys: string[] }> = {
+  const COMPAT_ENV: Record<string, { base: string; keys: string[] }> = {
     groq: { base: "https://api.groq.com/openai/v1", keys: ["GROQ_API_KEY"] },
     together: { base: "https://api.together.xyz/v1", keys: ["TOGETHER_API_KEY"] },
     openrouter: { base: "https://openrouter.ai/api/v1", keys: ["OPENROUTER_API_KEY"] },
     perplexity: { base: "https://api.perplexity.ai", keys: ["PERPLEXITY_API_KEY", "PPLX_API_KEY"] },
   };
-  if (provider in COMPAT_DEFAULTS) {
-    const d = COMPAT_DEFAULTS[provider];
-    return {
-      baseUrl: pick(`${provider.toUpperCase()}_BASEURL`, "SABANA_BASE_URL") || d.base,
-      apiKey: pick(...d.keys, "SABANA_API_KEY"),
-      needsKey: true,
-    };
+  if (provider in COMPAT_ENV) {
+    const d = COMPAT_ENV[provider];
+    const key = pick(...d.keys, "SABANA_API_KEY");
+    if (key) return { baseUrl: pick(`${provider.toUpperCase()}_BASEURL`, "SABANA_BASE_URL") || d.base, apiKey: key, needsKey: true };
   }
   if (provider === "ollama") {
-    return {
-      baseUrl: pick("OLLAMA_BASEURL", "SABANA_BASE_URL") || "http://localhost:11434/v1",
-      apiKey: pick("OPENAI_KEY", "SABANA_API_KEY") || "ollama",
-      needsKey: false,
-    };
+    const key = pick("OPENAI_KEY", "SABANA_API_KEY") || "ollama";
+    return { baseUrl: pick("OLLAMA_BASEURL", "SABANA_BASE_URL") || "http://localhost:11434/v1", apiKey: key, needsKey: false };
   }
   if (provider === "mock") {
     return { baseUrl: "", apiKey: "mock", needsKey: false };
   }
   if (provider === "custom") {
-    return {
-      baseUrl: pick("CUSTOM_BASEURL", "SABANA_BASE_URL"),
-      apiKey: pick("CUSTOM_API_KEY", "SABANA_API_KEY"),
-      needsKey: true,
-    };
+    const key = pick("CUSTOM_API_KEY", "SABANA_API_KEY");
+    if (key) return { baseUrl: pick("CUSTOM_BASEURL", "SABANA_BASE_URL"), apiKey: key, needsKey: true };
   }
-  return {
-    baseUrl: pick("OPENAI_BASEURL", "SABANA_BASE_URL") || "https://api.openai.com/v1",
-    apiKey: pick("OPENAI_KEY", "SABANA_API_KEY"),
-    needsKey: true,
-  };
+  // Default (openai)
+  const openaiKey = pick("OPENAI_KEY", "SABANA_API_KEY");
+  if (openaiKey) return { baseUrl: pick("OPENAI_BASEURL", "SABANA_BASE_URL") || "https://api.openai.com/v1", apiKey: openaiKey, needsKey: true };
+
+  // 2. settings.providers[name] (bila settings:true)
+  if (useSettings) {
+    const s = loadSettings();
+    const cfg = s.providers[provider];
+    if (cfg?.apiKey) {
+      return { baseUrl: cfg.baseUrl || PROVIDER_DEFAULTS[provider] || "", apiKey: cfg.apiKey, needsKey: true };
+    }
+  }
+
+  // 3. Fallback: no key, use preset defaults
+  const preset = PROVIDER_DEFAULTS_OBJ[provider];
+  return { baseUrl: preset?.baseUrl || "", apiKey: "", needsKey: true };
 }
+
+const PROVIDER_DEFAULTS: Record<string, string> = {
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com",
+  google: "https://generativelanguage.googleapis.com/v1beta/openai",
+  groq: "https://api.groq.com/openai/v1",
+  together: "https://api.together.xyz/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  perplexity: "https://api.perplexity.ai",
+  ollama: "http://localhost:11434/v1",
+  custom: "",
+  mock: "",
+};
+
+const PROVIDER_DEFAULTS_OBJ: Record<string, { baseUrl: string }> = {
+  openai: { baseUrl: "https://api.openai.com/v1" },
+  anthropic: { baseUrl: "https://api.anthropic.com" },
+  google: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
+  groq: { baseUrl: "https://api.groq.com/openai/v1" },
+  together: { baseUrl: "https://api.together.xyz/v1" },
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1" },
+  perplexity: { baseUrl: "https://api.perplexity.ai" },
+  ollama: { baseUrl: "http://localhost:11434/v1" },
+  custom: { baseUrl: "" },
+  mock: { baseUrl: "" },
+};
 
 /** "Connect provider": uji cepat koneksi sebelum dipakai session. */
 export async function testProviderConnection(provider: string): Promise<{ ok: boolean; detail: string }> {
   const { baseUrl, apiKey, needsKey } = resolveProvider(provider);
   if (needsKey && !apiKey) {
-    return { ok: false, detail: "API key belum di-set di .env" };
+    return { ok: false, detail: "API key belum di-set" };
   }
   try {
     if (provider === "ollama") {
@@ -179,7 +199,6 @@ export async function testProviderConnection(provider: string): Promise<{ ok: bo
       return { ok: true, detail: `ollama terhubung. Model lokal: ${names.slice(0, 200)}` };
     }
     if (provider === "anthropic") {
-      // Anthropic tak punya endpoint list publik via API key konsumen — anggap ok bila key ada.
       return { ok: true, detail: "API key ditemukan. Koneksi real diuji saat turn pertama." };
     }
     const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
@@ -210,8 +229,7 @@ export interface ProviderModelList {
 
 /**
  * Ambil daftar model dari endpoint provider.
- * OpenAI-compatible (openai/groq/together/openrouter/perplexity/google/custom):
- *   GET {baseUrl}/models. Ollama: GET /api/tags. Anthropic: tak ada list publik.
+ * OpenAI-compatible: GET {baseUrl}/models. Ollama: GET /api/tags. Anthropic: tak ada list publik.
  */
 export async function fetchProviderModels(
   provider: string,

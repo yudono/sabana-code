@@ -13,6 +13,7 @@ import {
   saveSettings,
   settingsPath,
   type SettingsFile,
+  type ProviderConfig,
 } from "./settings.js";
 import { flog } from "./utils/filelog.js";
 
@@ -80,14 +81,15 @@ export async function runSetupWizard(): Promise<SettingsFile> {
     const tavily = await ask(rl, "Tavily API key untuk web_search (opsional, Enter lewati): ");
 
     const s = loadSettings();
-    s.env = {
-      ...s.env,
-      SABANA_PROVIDER: provider,
-      SABANA_BASE_URL: baseUrl,
-      SABANA_API_KEY: apiKey,
-      SABANA_MODEL: model,
-      ...(tavily ? { TAVILY_API_KEY: tavily } : {}),
+    s.default_provider = provider;
+    s.default_model = model;
+    s.providers[provider] = {
+      baseUrl,
+      apiKey,
+      model,
+      maxTokens: 8192,
     };
+    if (tavily) s.tavily_api_key = tavily;
     saveSettings(s);
     flog("setup", `provider=${provider} model=${model}`);
     process.stdout.write(`\n✓ Tersimpan di ${settingsPath()}\n`);
