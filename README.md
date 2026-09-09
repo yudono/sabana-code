@@ -1,5 +1,7 @@
 # sabana-code
 
+![sabana-code TUI](Screenshot.png)
+
 Coding agent CLI + TUI ala claude-code / opencode: **single agent loop** dengan tool calling
 filesystem, terminal, dan pencarian internet. Bisa dijalankan dari direktori mana pun —
 session, kredensial, log, dan database tersimpan global di `~/sabana-code/`.
