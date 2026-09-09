@@ -7,14 +7,33 @@ session, kredensial, log, dan database tersimpan global di `~/sabana-code/`.
 ## Fitur
 
 - **Single agent process** — satu loop otonom: pahami perintah → panggil tools → verifikasi → selesai.
-- **Tool calling** — `read_file`, `write_file`, `modified_file` (diff), `delete_file`, `list_directory`, `glob`, `grep`
-  (filesystem), `shell` (terminal), `web_search`, `web_fetch` (internet via Tavily + fallback).
-- **TUI interaktif** (`sabana-code`) — chat, input prompt, live tool-calling, ganti model/provider,
-  resume session, sub-agent.
+  Tidak ada orkestrasi multi-agent yang rumit; satu agen mengerjakan satu tugas sampai tuntas.
+- **Tool calling filesystem** — `read_file` (baca + nomor baris), `write_file` (tulis/timpa),
+  `modified_file` (edit terarah + keluaran unified diff `+`/`-`), `delete_file` (hapus file/dir kosong),
+  plus `list_directory`, `glob`, `grep` untuk eksplorasi. Semua path di-sandbox ke workspace.
+- **Tool calling terminal** — `shell` untuk perintah build/test/git/dll, dengan pengaman perintah
+  gantung (dev server, `sleep`, background `&` otomatis diblokir).
+- **Tool calling internet** — `web_search` (via Tavily, fallback DuckDuckGo) dan `web_fetch`
+  untuk baca dokumentasi/API saat coding.
+- **TUI interaktif fullscreen** — chat, input prompt, live tool-calling dengan ringkasan
+  per langkah (`read_file App.tsx`, `edit_file App.tsx (+11, -2)`, `$ npm test → exit 0`).
+  Klik baris tool untuk membuka **pratinjau fullscreen** (syntax highlighting) —
+  `Esc` untuk keluar. `↑`/`↓` scroll riwayat, klik mouse didukung.
+- **Izin terminal per-session** — perintah berisiko (`rm`, `mkdir`, `npm`, …) meminta
+  persetujuan inline: `[y]` sekali, `[a]` semua perintah serupa sekaligus
+  (mis. sekali setuju `npm`, maka `npm install`/`npm run build`/`npm test` ikut lolos),
+  `[n]` tolak. Perintah aman (`cd`, `ls`, `cat`, …) dan semua operasi file
+  langsung jalan tanpa prompt. Keputusan tersimpan di file session.
 - **Session per project** — tiap folder proyek otomatis terdaftar di `~/sabana-code/projects/`,
-  tiap sesi tersimpan sebagai UUID di `~/sabana-code/sessions/` dan bisa di-resume.
-- **Sub-agent kustom** — profil AI di `~/sabana-code/agents/*.md` (mis. reviewer, security auditor).
-- **Multi-provider** — OpenAI-compatible, Anthropic, Google Gemini, Ollama lokal, URL kustom.
+  tiap sesi tersimpan sebagai UUID di `~/sabana-code/sessions/` dan bisa di-resume
+  kapan pun (`sabana-code -r <id>`).
+- **Sub-agent kustom** — profil AI di `~/sabana-code/agents/*.md` (mis. reviewer, security auditor)
+  untuk delegasi tugas spesifik.
+- **Multi-provider & multi-model** — OpenAI, Anthropic, Google Gemini, Groq, Together,
+  OpenRouter, Perplexity, Ollama lokal, atau URL kustom yang OpenAI-compatible.
+  Ganti kapan pun tanpa kehilangan riwayat; daftar model diambil live dari `/v1/models`.
+- **Compact konteks otomatis** — saat konteks menyentuh >80% window, riwayat lama
+  diringkas otomatis jadi satu pesan; bisa juga manual via `/compact`.
 - **Guardrails** — blokir prompt injection, XSS, private key, prompt raksasa; secret di output
   tool disensor sebelum masuk konteks LLM.
 - **Rate limiting** — batas request LLM per menit (default 60, bisa diubah) + retry backoff 429/5xx.
@@ -27,18 +46,15 @@ session, kredensial, log, dan database tersimpan global di `~/sabana-code/`.
 ## Cara menjalankan
 
 ```bash
-# 1. Install & build
-git clone https://github.com/yudono/sabana-code
-cd sabana-code
-npm install
-npm run build
+# Install langsung dari npm (disarankan)
+npm install -g sabana-code
 
-# 2. Pasang perintah global (sekali saja)
-npm link
-# → tersedia `sabana-code` di PATH
-
-# 3. Setup pertama (membuat ~/sabana-code/ + settings.json + pilih provider)
+# Setup pertama (membuat ~/sabana-code/ + settings.json + pilih provider)
 sabana-code setup
+
+# Mulai coding, mis. di folder proyekmu
+cd ./my-project
+sabana-code
 ```
 
 Saat pertama dijalankan, `sabana-code` menginisialisasi home global:
@@ -56,8 +72,7 @@ Saat pertama dijalankan, `sabana-code` menginisialisasi home global:
 ### Tanpa install global
 
 ```bash
-npx tsx src/index.ts "buatkan file hello.py" -C ./demo --auto-approve
-npx tsx src/tui/main.tsx -C ./demo --provider ollama
+npx -y sabana-code@latest --provider ollama
 ```
 
 ## Penggunaan CLI
