@@ -36,7 +36,7 @@ import {
   saveSession,
   type Session,
 } from "../session/store.js";
-import { helpText, matchModelName, parseCommand } from "./commands.js";
+import { helpText, matchModelName, parseCommand, suggestCommands } from "./commands.js";
 
 export type ChatItem =
   | { kind: "user"; text: string }
@@ -101,7 +101,7 @@ function truncate(s: string, n = 400): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-// ─── Perkiraan lebar sel terminal (bias ke ATAS agar tak overflow) ───
+// ─── Estimated terminal cell widths (bias UP to avoid overflow) ───
 function cellWidth(s: string): number {
   let n = 0;
   for (const ch of s) {
@@ -172,8 +172,8 @@ export function computeWindow(
 ): { start: number; end: number; scroll: number; total: number } {
   const total = heights.reduce((a, b) => a + b, 0);
   const s = Math.min(Math.max(0, Math.floor(scroll)), Math.max(0, total - avail));
-  // Lewati `s` baris dari bawah (item utuh saja). Item yang hanya muat
-  // sebagian di bawah ikut dibuang — kalau dirender ia overflow menabrak
+  // Skip `s` rows from the bottom (whole items only). Partially fitting
+  // bottom items are dropped too — kalau dirender ia overflow menabrak
   // input box (sumber layar "nabrak").
   let end = heights.length;
   let skipped = 0;
@@ -205,7 +205,7 @@ export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): Chat
   const w = Math.max(20, cols - (boxed ? 6 : 4));
   const lines = it.text.split("\n");
   if (it.kind === "info") {
-    // Untuk info: pertahankan baris pertama (header) + berikutnya sampai budget habis
+    // For info: keep the first line (header) + following lines until budget runs out
     let used = 0;
     let to = 0;
     while (to < lines.length) {
@@ -230,7 +230,7 @@ export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): Chat
   return { ...it, text: `… (${lines.length - from} baris di atas disembunyikan)\n` + lines.slice(from).join("\n") };
 }
 
-/** Tinggi baris teks (untuk panel pratinjau & peta klik). */
+/** Text row heights (for preview panels & click maps). */
 function wrapRows(s: string, w: number): number {
   const ww = Math.max(20, w);
   return s.split("\n").reduce((n, ln) => n + Math.max(1, Math.ceil(cellWidth(ln) / ww)), 0);
@@ -247,7 +247,6 @@ export interface PreviewKey {
 }
 
 export type PreviewKeyAction = "close" | "up" | "down" | "pageup" | "pagedown" | null;
-
 /**
  * Tombol saat preview fullscreen terbuka → aksi. Pure agar bisa di-unit-test.
  * Esc SELALU menutup (tidak ada pengecualian state lain) — regresi bug Esc mati.
@@ -262,7 +261,24 @@ export function previewKeyAction(inp: string, key: PreviewKey): PreviewKeyAction
   return null;
 }
 
-/** Tampilkan prompt asli, bukan blob konteks awal.
+export const PROMPT_HISTORY_MAX = 100;
+
+/**
+ * Prompt history navigation (shell-style ↑/↓). Pure for unit tests.
+ * @param current index into history, or null when editing fresh input
+ * @param dir -1 = older (up), +1 = newer (down)
+ * @returns next index, or null to restore the draft being typed
+ */
+export function historyStep(current: number | null, dir: -1 | 1, len: number): number | null {
+  if (len === 0) return null;
+  if (current === null) return dir < 0 ? len - 1 : null;
+  const next = current + dir;
+  if (next < 0) return 0;
+  if (next >= len) return null;
+  return next;
+}
+
+/** Show the original prompt, not the initial-context blob.
  *  Bentuk blob: "## USER REQUEST\n<prompt>\n\n## WORKSPACE\n...".
  *  Hanya bagian prompt yang ditampilkan; section berikutnya dipotong. */
 export function displayPrompt(content: string): string {
@@ -283,7 +299,7 @@ export function displayPrompt(content: string): string {
   return truncate(t || content);
 }
 
-/** Catatan error transien (Ctrl+C/abort) — disembunyikan saat resume, basi. */
+/** Transient error notes (Ctrl+C/abort) — hidden on resume, stale. */
 const ABORT_RE = /^Tool error dari LLM:/;
 
 function tryParseToolOutput(content: string): unknown {
@@ -381,7 +397,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   const { isRawModeSupported } = useStdin();
   const { stdout } = useStdout();
 
-  // Ukuran terminal aktual (fullscreen) + ikuti resize.
+  // Actual terminal size (fullscreen) + follow resizes.
   const [size, setSize] = useState(() => ({
     columns: stdout?.columns || 80,
     rows: stdout?.rows || 24,
@@ -402,7 +418,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           {
             kind: "info" as const,
             tone: "dim" as const,
-            text: `Melanjutkan session ${initialSession.id.slice(0, 8)} (${initialSession.messages.length} pesan).`,
+            text: `Resuming session ${initialSession.id.slice(0, 8)} (${initialSession.messages.length} messages).`,
           },
           ...rebuildItems(initialSession.messages),
         ]
@@ -420,7 +436,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   const streamRef = useRef("");
   const runningRef = useRef(false);
   const agentRef = useRef<SingleAgent | null>(null);
-  // Daftar model live terakhir (untuk pilih via /models <nomor>).
+  // Last live model list (for /models <number> selection).
   const modelPickRef = useRef<{ provider: string; models: string[] } | null>(null);
 
   useEffect(() => {
@@ -447,20 +463,21 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   // ── Izin terminal/file inline: [y] sekali / [a] semua serupa / [n] tolak ──
   const [approval, setApproval] = useState<{ label: string; scope: string } | null>(null);
 
-  // ── Dropdown SelectList untuk model/provider ──
+  // ── Dropdown SelectList: model/provider/commands ──
   const [dropdown, setDropdown] = useState<{
-    type: "models" | "providers";
+    type: "models" | "providers" | "commands";
+    title: string;
     options: string[];
     selected: number;
     onSelect: (value: string) => void;
   } | null>(null);
 
   const openModelDropdown = useCallback((options: string[], onSelect: (value: string) => void) => {
-    setDropdown({ type: "models", options, selected: 0, onSelect });
+    setDropdown({ type: "models", title: "Model", options, selected: 0, onSelect });
   }, []);
 
   const openProviderDropdown = useCallback((options: string[], onSelect: (value: string) => void) => {
-    setDropdown({ type: "providers", options, selected: 0, onSelect });
+    setDropdown({ type: "providers", title: "Provider", options, selected: 0, onSelect });
   }, []);
 
   const closeDropdown = useCallback(() => {
@@ -476,7 +493,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
       const label = _req.command
         ? `$ ${_req.command.replace(/\s+/g, " ").trim().slice(0, 100)}`
         : summarizeCall(_req.tool, _req.args);
-      setApproval({ label, scope: _req.base ? `semua "${_req.base}"` : "semua yang serupa" });
+      setApproval({ label, scope: _req.base ? `all "${_req.base}"` : "all similar" });
     });
   }, []);
 
@@ -485,8 +502,8 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     approvalResolve.current = null;
     approvalActive.current = false;
     setApproval(null);
-    // Engine menyimpan "all"/"deny" sendiri; sinkron ke session terjadi
-    // saat turn selesai (runTurn) agar tidak menyimpan state basi.
+    // The engine stores "all"/"deny" itself; session sync happens
+    // when the turn finishes (runTurn) to avoid saving stale state.
     if (r) r(v);
   }, []);
 
@@ -502,6 +519,14 @@ interface PreviewState {
   const [previewScroll, setPreviewScroll] = useState(0);
   const rowMapRef = useRef<Array<{ y0: number; y1: number; id: string }>>([]);
   const lastMouseAt = useRef(0);
+  // Timestamp COMPLETE mouse sequences (parser) — untuk menangkal phantom Esc.
+  // Lebih presisi dari lastMouseAt (potongan chunk) sehingga Esc asli lolos.
+  const lastSeqAt = useRef(0);
+  // Shell-style prompt history (↑ = lebih lama, ↓ = kembali ke draf).
+  const histRef = useRef<string[]>([]);
+  const histIdxRef = useRef<number | null>(null);
+  const navValueRef = useRef<string | null>(null);
+  const draftRef = useRef("");
   const openPreviewRef = useRef<(id: string) => void>(() => {});
   const clickRef = useRef<{ rowMap: Array<{ y0: number; y1: number; id: string }>; previewOpen: boolean }>({
     rowMap: [],
@@ -530,7 +555,7 @@ interface PreviewState {
     [workspaceDir],
   );
 
-  // ── Event dari agent → update TUI ──
+  // ── Agent events → TUI updates ──
   const handleEvent = useCallback(
     (ev: AgentEvent) => {
       switch (ev.type) {
@@ -577,10 +602,10 @@ interface PreviewState {
           push({ kind: "info", tone: "red", text: ev.message });
           break;
         case "trimmed":
-          push({ kind: "info", tone: "yellow", text: `Konteks dipangkas (${ev.count} pesan) agar muat di window model.` });
+          push({ kind: "info", tone: "yellow", text: `Context trimmed (${ev.count} messages) to fit the model window.` });
           break;
         case "compacted":
-          push({ kind: "info", tone: "green", text: `Konteks dipadatkan otomatis (${ev.dropped} pesan → ringkasan). Lanjut…` });
+          push({ kind: "info", tone: "green", text: `Context auto-compacted (${ev.dropped} messages → summary). Continuing…` });
           break;
         case "done":
           flushStream();
@@ -597,7 +622,7 @@ interface PreviewState {
   const runTurn = useCallback(
     async (prompt: string) => {
       if (runningRef.current) {
-        push({ kind: "info", tone: "yellow", text: "Tunggu turn selesai (Ctrl+C untuk batalkan)." });
+        push({ kind: "info", tone: "yellow", text: "Wait for the turn to finish (Ctrl+C to cancel)." });
         return;
       }
       runningRef.current = true;
@@ -612,12 +637,12 @@ interface PreviewState {
           push({
             kind: "info",
             tone: "red",
-            text: result.finalText || "Turn selesai tanpa hasil — cek error di atas.",
+            text: result.finalText || "Turn finished with no result — check the errors above.",
           });
         }
       } catch (e) {
         flushStream();
-        push({ kind: "info", tone: "red", text: `Gagal: ${(e as Error).message}` });
+        push({ kind: "info", tone: "red", text: `Failed: ${(e as Error).message}` });
       } finally {
         runningRef.current = false;
         setRunning(false);
@@ -643,25 +668,25 @@ interface PreviewState {
           tone: "green",
           text: known
             ? `Model → ${id} (window ${known.contextWindow.toLocaleString()} token)`
-            : `Model → ${id} (tidak di katalog, pakai window default provider)`,
+            : `Model → ${id} (not in catalog, using provider default window)`,
         });
       };
 
       /** Pindah provider (dipakai /providers use). */
       const doSwitchProvider = async (p: string): Promise<boolean> => {
         if (!SUPPORTED_PROVIDERS.includes(p)) {
-          push({ kind: "info", tone: "red", text: `Provider tak dikenal: ${p}` });
+          push({ kind: "info", tone: "red", text: `Unknown provider: ${p}` });
           return false;
         }
         const creds = resolveCredentials(p);
         if (!creds.apiKey && p !== "ollama" && p !== "mock") {
-          push({ kind: "info", tone: "red", text: `Provider ${p} butuh API key — /login ${p} <key> atau sabana-code auth login ${p}. Dibatalkan.` });
+          push({ kind: "info", tone: "red", text: `Provider ${p} needs an API key — /login ${p} <key> or sabana-code auth login ${p}. Cancelled.` });
           return false;
         }
         agent.setModelProvider(sess.model, p, creds.apiKey, creds.baseUrl);
         modelPickRef.current = null; // daftar /models lama tak berlaku lagi
         persist({ ...sess, provider: p });
-        push({ kind: "info", tone: "green", text: `Provider → ${p}. Menguji koneksi…` });
+        push({ kind: "info", tone: "green", text: `Provider → ${p}. Testing connection…` });
         const test = await testProviderConnection(p);
         push({ kind: "info", tone: test.ok ? "green" : "red", text: test.detail });
         return test.ok;
@@ -670,11 +695,11 @@ interface PreviewState {
       /** Simpan kredensial (dipakai /login dan /providers login). */
       const doLogin = (p: string, key: string, base: string): boolean => {
         if (!p || !key || !SUPPORTED_PROVIDERS.includes(p) || p === "mock") {
-          push({ kind: "info", tone: "red", text: "Pakai: /login <provider> <api-key> [base-url]" });
+          push({ kind: "info", tone: "red", text: "Usage: /login <provider> <api-key> [base-url]" });
           return false;
         }
         saveCredential(p, key, base || "");
-        push({ kind: "info", tone: "green", text: `Kredensial ${p} tersimpan global. Kini bisa jalan dari direktori mana pun.` });
+        push({ kind: "info", tone: "green", text: `Credential for ${p} saved globally. Works from any directory now.` });
         return true;
       };
 
@@ -688,31 +713,31 @@ interface PreviewState {
           agentRef.current = makeAgent(sessionRef.current, maxSteps, handleEvent, asker);
           setCutoff(itemsRef.current.length + 1);
           setScrollOffset(0);
-          push({ kind: "info", tone: "green", text: `Session baru: ${sessionRef.current.id.slice(0, 8)}` });
+          push({ kind: "info", tone: "green", text: `New session: ${sessionRef.current.id.slice(0, 8)}` });
           break;
         }
         case "sessions": {
           const list = listSessions();
-          if (list.length === 0) push({ kind: "info", tone: "dim", text: "Belum ada session tersimpan." });
+          if (list.length === 0) push({ kind: "info", tone: "dim", text: "No saved sessions yet." });
           else
             push({
               kind: "info",
               tone: "dim",
-              text: ["Session tersimpan:", ...list.slice(0, 15).map((s, i) => `  ${i + 1}. ${s.id.slice(0, 8)}  ${s.title}  [${s.model}/${s.provider}]  ${s.turns} turns`)].join("\n"),
+              text: ["Saved sessions:", ...list.slice(0, 15).map((s, i) => `  ${i + 1}. ${s.id.slice(0, 8)}  ${s.title}  [${s.model}/${s.provider}]  ${s.turns} turns`)].join("\n"),
             });
           break;
         }
         case "projects": {
           const mine = projectIdFor(workspaceDir);
           const list = listProjects();
-          if (list.length === 0) push({ kind: "info", tone: "dim", text: "Belum ada project terdaftar." });
+          if (list.length === 0) push({ kind: "info", tone: "dim", text: "No registered projects yet." });
           else
             push({
               kind: "info",
               tone: "dim",
               text: [
-                "Project (riwayat per folder):",
-                ...list.slice(0, 15).map((p) => `  ${p.id === mine ? "●" : "○"} ${p.name}  ${p.sessions} session  ${p.path}`),
+                "Projects (history per folder):",
+                ...list.slice(0, 15).map((p) => `  ${p.id === mine ? "●" : "○"} ${p.name}  ${p.sessions} sessions  ${p.path}`),
               ].join("\n"),
             });
           const mineInfo = list.find((p) => p.id === mine);
@@ -720,19 +745,19 @@ interface PreviewState {
             const ss = projectSessions(mine)
               .map((s) => `  - ${s.id.slice(0, 8)}  ${s.title}`)
               .join("\n");
-            if (ss) push({ kind: "info", tone: "dim", text: `Session di project ini:\n${ss}\nLanjutkan: /resume <id>` });
+            if (ss) push({ kind: "info", tone: "dim", text: `Sessions in this project:\n${ss}\nResume: /resume <id>` });
           }
           break;
         }
         case "agents": {
           const list = listAgents();
           if (list.length === 0)
-            push({ kind: "info", tone: "dim", text: "Belum ada profil di ~/sabana-code/agents/. Buat <nama>.md dengan frontmatter name/description." });
+            push({ kind: "info", tone: "dim", text: "No profiles in ~/sabana-code/agents/ yet. Create <name>.md with name/description frontmatter." });
           else
             push({
               kind: "info",
               tone: "dim",
-              text: ["Sub-agent kustom:", ...list.map((a) => `  ${a.name} — ${a.description}${a.model ? ` (model: ${a.model})` : ""}`), "Pakai: /agent <nama> <tugas>"].join("\n"),
+              text: ["Custom sub-agents:", ...list.map((a) => `  ${a.name} — ${a.description}${a.model ? ` (model: ${a.model})` : ""}`), "Usage: /agent <name> <task>"].join("\n"),
             });
           break;
         }
@@ -740,21 +765,21 @@ interface PreviewState {
           const [aname, ...rest] = args;
           const profile = aname ? loadAgent(aname) : null;
           if (!profile) {
-            push({ kind: "info", tone: "red", text: aname ? `Sub-agent '${aname}' tidak ada. /agents untuk daftar.` : "Pakai: /agent <nama> <tugas>" });
+            push({ kind: "info", tone: "red", text: aname ? `Sub-agent '${aname}' not found. /agents to list.` : "Usage: /agent <name> <task>" });
             break;
           }
           const task = rest.join(" ").trim();
           if (!task) {
-            push({ kind: "info", tone: "red", text: `Pakai: /agent ${profile.name} <tugas>` });
+            push({ kind: "info", tone: "red", text: `Usage: /agent ${profile.name} <task>` });
             break;
           }
           if (runningRef.current) {
-            push({ kind: "info", tone: "yellow", text: "Tunggu turn selesai dulu." });
+            push({ kind: "info", tone: "yellow", text: "Wait for the turn to finish first." });
             break;
           }
           runningRef.current = true;
           setRunning(true);
-          push({ kind: "info", tone: "dim", text: `→ mendelegasikan ke ${profile.name}: ${truncate(task, 140)}` });
+          push({ kind: "info", tone: "dim", text: `→ delegating to ${profile.name}: ${truncate(task, 140)}` });
           try {
             const sess = sessionRef.current;
             const creds = resolveCredentials(sess.provider);
@@ -768,8 +793,8 @@ interface PreviewState {
               approvals: sess.approvals,
               askPermission: asker,
             });
-            push({ kind: "assistant", text: sub.text.trim() || "(sub-agent tanpa jawaban teks)" });
-            // Gabungkan izin baru dari sub-agent ke session + engine utama.
+            push({ kind: "assistant", text: sub.text.trim() || "(sub-agent returned no text)" });
+            // Merge new sub-agent approvals into the session + main engine.
             agentRef.current?.mergeApprovals(sub.approvals);
             persist({
               ...sess,
@@ -781,9 +806,9 @@ interface PreviewState {
               filesModified: [...new Set([...sess.filesModified, ...sub.files])],
               approvals: agentRef.current?.getApprovals() ?? sess.approvals,
             });
-            if (!sub.success) push({ kind: "info", tone: "yellow", text: "Sub-agent selesai tanpa hasil penuh." });
+            if (!sub.success) push({ kind: "info", tone: "yellow", text: "Sub-agent finished without a full result." });
           } catch (e) {
-            push({ kind: "info", tone: "red", text: `Sub-agent gagal: ${(e as Error).message}` });
+            push({ kind: "info", tone: "red", text: `Sub-agent failed: ${(e as Error).message}` });
           } finally {
             runningRef.current = false;
             setRunning(false);
@@ -794,7 +819,7 @@ interface PreviewState {
           if (!args[0]) {
             const last = lastSession();
             if (!last) {
-              push({ kind: "info", tone: "red", text: "Belum ada session. Pakai /resume <id>." });
+              push({ kind: "info", tone: "red", text: "No sessions yet. Usage: /resume <id>." });
               break;
             }
             args = [last.id];
@@ -806,20 +831,20 @@ interface PreviewState {
             if (!isNaN(idx) && idx >= 1 && idx <= list.length) target = loadSession(list[idx - 1].id);
           }
           if (!target) {
-            push({ kind: "info", tone: "red", text: `Session '${args[0]}' tidak ditemukan.` });
+            push({ kind: "info", tone: "red", text: `Session '${args[0]}' not found.` });
             break;
           }
           persist(target);
           agentRef.current = makeAgent(target, maxSteps, handleEvent, asker);
           setCutoff(itemsRef.current.length + 1);
           setScrollOffset(0);
-          push({ kind: "info", tone: "green", text: `Melanjutkan session ${target.id.slice(0, 8)} (${target.messages.length} pesan).` });
+          push({ kind: "info", tone: "green", text: `Resuming session ${target.id.slice(0, 8)} (${target.messages.length} messages).` });
           for (const it of rebuildItems(target.messages)) push(it);
           break;
         }
         case "providers": {
           const sub = (args[0] || "list").toLowerCase();
-          // Buka dropdown jika tidak ada subcommand atau subcommand "select"
+          // Open the dropdown with no subcommand atau subcommand "select"
           if (sub === "list" || sub === "select" || sub === "") {
             const providers = SUPPORTED_PROVIDERS.filter((p) => p !== "mock");
             openProviderDropdown(providers, async (pick) => {
@@ -835,18 +860,18 @@ interface PreviewState {
             doLogin(args[1].toLowerCase(), args[2], args[3] || "");
             break;
           }
-          push({ kind: "info", tone: "red", text: "Pakai: /providers [list]  •  /providers use <nama>  •  /providers login <nama> <key> [base-url]" });
+          push({ kind: "info", tone: "red", text: "Usage: /providers [list]  •  /providers use <name>  •  /providers login <name> <key> [base-url]" });
           break;
         }
         case "models": {
           const arg = (args[0] || "").trim();
           const pending = modelPickRef.current?.provider === sess.provider ? modelPickRef.current : null;
-          // Pilih via nomor dari daftar terakhir.
+          // Select by number from the last list.
           if (/^\d+$/.test(arg) && pending) {
             const idx = parseInt(arg, 10) - 1;
             const pick = pending.models[idx];
             if (!pick) {
-              push({ kind: "info", tone: "red", text: `Nomor di luar daftar (1–${pending.models.length}).` });
+              push({ kind: "info", tone: "red", text: `Number out of range (1–${pending.models.length}).` });
               break;
             }
             modelPickRef.current = null;
@@ -863,21 +888,21 @@ interface PreviewState {
             }
           }
           const filter = /^\d+$/.test(arg) ? "" : arg.toLowerCase();
-          push({ kind: "info", tone: "dim", text: `Mengambil daftar model ${sess.provider}…` });
+          push({ kind: "info", tone: "dim", text: `Fetching ${sess.provider} model list…` });
           const live = await fetchProviderModels(sess.provider);
           if (!live.ok) {
             const known = listModels(sess.provider);
             push({
               kind: "info",
               tone: "yellow",
-              text: [`Live gagal (${live.error}). Katalog bawaan:`, ...known.map((m) => `  ${m.id} — ${m.description}`), "Pilih: /models <nomor|nama persis>"].join("\n"),
+              text: [`Live fetch failed (${live.error}). Built-in catalog:`, ...known.map((m) => `  ${m.id} — ${m.description}`), "Select: /models <number|exact name>"].join("\n"),
             });
             break;
           }
           let models = live.models.filter(isChatModelId);
           if (filter) models = models.filter((m) => m.toLowerCase().includes(filter));
           if (models.length === 0) {
-            push({ kind: "info", tone: "red", text: "Tidak ada model cocok. Coba filter lain atau ketik nama persis: /models <nama>." });
+            push({ kind: "info", tone: "red", text: "No matching models. Try another filter or type the exact name: /models <name>." });
             break;
           }
           const CAP = 40;
@@ -894,9 +919,9 @@ interface PreviewState {
             kind: "info",
             tone: "dim",
             text: [
-              `Model ${sess.provider} (${live.source === "live" ? "live" : "katalog"}${models.length > CAP ? `, tampil ${CAP}/${models.length}` : `, ${models.length}`}) — aktif: ${sess.model}`,
-              ...shown.map((m, i) => `  ${i + 1}. ${m}${m === sess.model ? "  ← aktif" : ""}`),
-              "Pilih: /models <nomor|nama persis>  atau ketik /models saja untuk dropdown",
+              `Model ${sess.provider} (${live.source === "live" ? "live" : "catalog"}${models.length > CAP ? `, showing ${CAP}/${models.length}` : `, ${models.length}`}) — active: ${sess.model}`,
+              ...shown.map((m, i) => `  ${i + 1}. ${m}${m === sess.model ? "  ← active" : ""}`),
+              "Select: /models <number|exact name>  or bare /models for the dropdown",
             ].join("\n"),
           });
           break;
@@ -904,24 +929,24 @@ interface PreviewState {
         case "skills": {
           const list = listSkills(workspaceDir);
           if (list.length === 0)
-            push({ kind: "info", tone: "dim", text: "Belum ada skill. Buat *.md di ~/sabana-code/skills/ atau <project>/.sabana/skills/ (frontmatter name/description)." });
+            push({ kind: "info", tone: "dim", text: "No skills yet. Create *.md in ~/sabana-code/skills/ or <project>/.sabana/skills/ (name/description frontmatter)." });
           else
             push({
               kind: "info",
               tone: "dim",
-              text: ["Skills:", ...list.map((s) => `  ${s.name} — ${s.description} [${s.scope}]`), "Lihat isi: /skill <nama>"].join("\n"),
+              text: ["Skills:", ...list.map((s) => `  ${s.name} — ${s.description} [${s.scope}]`), "View: /skill <name>"].join("\n"),
             });
           break;
         }
         case "skill": {
           const sname = (args[0] || "").toLowerCase();
           if (!sname) {
-            push({ kind: "info", tone: "red", text: "Pakai: /skill <nama>" });
+            push({ kind: "info", tone: "red", text: "Usage: /skill <name>" });
             break;
           }
           const s = loadSkill(sname, workspaceDir);
           if (!s) {
-            push({ kind: "info", tone: "red", text: `Skill '${sname}' tidak ada. /skills untuk daftar.` });
+            push({ kind: "info", tone: "red", text: `Skill '${sname}' not found. /skills to list.` });
             break;
           }
           const body = s.instructions.length > 3000 ? s.instructions.slice(0, 3000) + "\n…(dipotong)" : s.instructions;
@@ -934,27 +959,27 @@ interface PreviewState {
           push({
             kind: "info",
             tone: "dim",
-            text: `Todo (${done}/${list.items.length} selesai):\n${formatTodos(list.items)}`,
+            text: `Todos (${done}/${list.items.length} done):\n${formatTodos(list.items)}`,
           });
           break;
         }
         case "mcp": {
           if ((args[0] || "").toLowerCase() === "reload") {
-            push({ kind: "info", tone: "dim", text: "Memuat ulang MCP…" });
+            push({ kind: "info", tone: "dim", text: "Reloading MCP…" });
             try {
               const r = await agent.reloadMcp();
               push({
                 kind: "info",
                 tone: r.errors.length > 0 ? "yellow" : "green",
-                text: `MCP reload: +${r.added} tools${r.errors.length > 0 ? `\nGagal: ${r.errors.join("; ")}` : ""}`,
+                text: `MCP reload: +${r.added} tools${r.errors.length > 0 ? `\nFailed: ${r.errors.join("; ")}` : ""}`,
               });
             } catch (e) {
-              push({ kind: "info", tone: "red", text: `MCP reload gagal: ${(e as Error).message}` });
+              push({ kind: "info", tone: "red", text: `MCP reload failed: ${(e as Error).message}` });
             }
           }
           const st = agent.mcpStatus();
           if (st.length === 0)
-            push({ kind: "info", tone: "dim", text: "Belum ada server MCP. Tambahkan di ~/sabana-code/mcp.json lalu /mcp reload." });
+            push({ kind: "info", tone: "dim", text: "No MCP servers yet. Add them in ~/sabana-code/mcp.json, then /mcp reload." });
           else
             push({
               kind: "info",
@@ -973,28 +998,28 @@ interface PreviewState {
         case "checkpoint": {
           const label = args.join(" ").trim();
           const cp = createCheckpoint(sess, workspaceDir, label || undefined);
-          push({ kind: "info", tone: "green", text: `Checkpoint tersimpan: ${cp.id.slice(0, 8)} "${cp.label}" (${cp.files.length} file, ${cp.messages.length} pesan). Mundur: /rewind ${cp.id.slice(0, 8)}` });
+          push({ kind: "info", tone: "green", text: `Checkpoint saved: ${cp.id.slice(0, 8)} "${cp.label}" (${cp.files.length} files, ${cp.messages.length} messages). Rewind: /rewind ${cp.id.slice(0, 8)}` });
           break;
         }
         case "checkpoints": {
           const list = listCheckpoints(sess.id);
-          if (list.length === 0) push({ kind: "info", tone: "dim", text: "Belum ada checkpoint di session ini. Buat: /checkpoint [label]" });
+          if (list.length === 0) push({ kind: "info", tone: "dim", text: "No checkpoints in this session yet. Create one: /checkpoint [label]" });
           else
             push({
               kind: "info",
               tone: "dim",
-              text: ["Checkpoints:", ...list.map((c) => `  ${c.id.slice(0, 8)}  "${c.label}"  ${c.files} file  ${c.messages} pesan`), "Mundur: /rewind <id>"].join("\n"),
+              text: ["Checkpoints:", ...list.map((c) => `  ${c.id.slice(0, 8)}  "${c.label}"  ${c.files} files  ${c.messages} messages`), "Rewind: /rewind <id>"].join("\n"),
             });
           break;
         }
         case "rewind": {
           const id = args[0];
           if (!id) {
-            push({ kind: "info", tone: "red", text: "Pakai: /rewind <id> (lihat /checkpoints)" });
+            push({ kind: "info", tone: "red", text: "Usage: /rewind <id> (see /checkpoints)" });
             break;
           }
           if (runningRef.current) {
-            push({ kind: "info", tone: "yellow", text: "Tunggu turn selesai dulu." });
+            push({ kind: "info", tone: "yellow", text: "Wait for the turn to finish first." });
             break;
           }
           const { session: next, result } = rewindToCheckpoint(sess, workspaceDir, id);
@@ -1007,35 +1032,35 @@ interface PreviewState {
           setScrollOffset(0);
           for (const it of rebuildItems(next.messages)) push(it);
           const bits = [
-            `${result.restored.length} file dikembalikan`,
-            ...(result.deleted.length > 0 ? [`${result.deleted.length} file dihapus`] : []),
-            ...(result.skipped.length > 0 ? [`${result.skipped.length} dilewati`] : []),
+            `${result.restored.length} files restored`,
+            ...(result.deleted.length > 0 ? [`${result.deleted.length} files deleted`] : []),
+            ...(result.skipped.length > 0 ? [`${result.skipped.length} skipped`] : []),
           ];
-          push({ kind: "info", tone: "green", text: `Mundur ke checkpoint ${id}: ${bits.join(", ")}. Riwayat: ${next.messages.length} pesan.` });
+          push({ kind: "info", tone: "green", text: `Rewound to checkpoint ${id}: ${bits.join(", ")}. History: ${next.messages.length} messages.` });
           break;
         }
         case "compact": {
           if (runningRef.current) {
-            push({ kind: "info", tone: "yellow", text: "Tunggu turn selesai dulu (Ctrl+C untuk batalkan)." });
+            push({ kind: "info", tone: "yellow", text: "Wait for the turn to finish first (Ctrl+C to cancel)." });
             break;
           }
           if (sess.messages.length <= 4) {
-            push({ kind: "info", tone: "dim", text: "Riwayat masih pendek — belum perlu dipadatkan." });
+            push({ kind: "info", tone: "dim", text: "History is still short — no need to compact yet." });
             break;
           }
           runningRef.current = true;
           setRunning(true);
-          push({ kind: "info", tone: "dim", text: "Meringkas konteks…" });
+          push({ kind: "info", tone: "dim", text: "Summarizing context…" });
           try {
             const r = await agent.compactHistory(sess.messages);
             if (!r.ok) {
-              push({ kind: "info", tone: "red", text: `Compact gagal: ${r.error}` });
+              push({ kind: "info", tone: "red", text: `Compact failed: ${r.error}` });
             } else {
               persist({ ...sess, messages: r.messages });
-              push({ kind: "info", tone: "green", text: `Konteks dipadatkan (${r.dropped} pesan → ringkasan):\n${r.summary.slice(0, 800)}` });
+              push({ kind: "info", tone: "green", text: `Context compacted (${r.dropped} messages → summary):\n${r.summary.slice(0, 800)}` });
             }
           } catch (e) {
-            push({ kind: "info", tone: "red", text: `Compact gagal: ${(e as Error).message}` });
+            push({ kind: "info", tone: "red", text: `Compact failed: ${(e as Error).message}` });
           } finally {
             runningRef.current = false;
             setRunning(false);
@@ -1047,7 +1072,7 @@ interface PreviewState {
           push({
             kind: "info",
             tone: u.pct > 85 ? "red" : u.pct > 60 ? "yellow" : "dim",
-            text: `Konteks: ~${u.tokens.toLocaleString()} / ${u.window.toLocaleString()} token (${u.pct.toFixed(1)}%) • ${sess.messages.length} pesan • model ${sess.model}`,
+            text: `Context: ~${u.tokens.toLocaleString()} / ${u.window.toLocaleString()} tokens (${u.pct.toFixed(1)}%) • ${sess.messages.length} messages • model ${sess.model}`,
           });
           break;
         }
@@ -1069,14 +1094,14 @@ interface PreviewState {
           const p = args[0];
           if (!p) {
             const rows = credentialSummary().map((c) => `  ${c.provider.padEnd(10)} ${c.source}`).join("\n");
-            push({ kind: "info", tone: "dim", text: `Kredensial:\n${rows}\nHapus: /logout <provider>` });
+            push({ kind: "info", tone: "dim", text: `Credentials:\n${rows}\nRemove: /logout <provider>` });
             break;
           }
           const removed = removeCredential(p);
           push({
             kind: "info",
             tone: removed ? "green" : "red",
-            text: removed ? `Kredensial ${p} dihapus.` : `Tidak ada kredensial ${p} yang tersimpan.`,
+            text: removed ? `Credential for ${p} removed.` : `No stored credential for ${p}.`,
           });
           break;
         }
@@ -1090,7 +1115,7 @@ interface PreviewState {
           exit();
           break;
         default:
-          push({ kind: "info", tone: "red", text: `Perintah tak dikenal: /${name}. Ketik /help.` });
+          push({ kind: "info", tone: "red", text: `Unknown command: /${name}. Type /help.` });
           break;
       }
     },
@@ -1101,6 +1126,14 @@ interface PreviewState {
     (value: string) => {
       const text = value.trim();
       if (!text) return;
+      // Catat ke riwayat prompt (dedup berurutan, cap 100).
+      const h = histRef.current;
+      if (h[h.length - 1] !== text) {
+        h.push(text);
+        if (h.length > PROMPT_HISTORY_MAX) h.shift();
+      }
+      histIdxRef.current = null;
+      navValueRef.current = null;
       setInput("");
       setScrollOffset(0); // output baru → kembali menempel ekor
       const cmd = parseCommand(text);
@@ -1110,19 +1143,50 @@ interface PreviewState {
     [execCommand, runTurn],
   );
 
-  // Saring sisa sequence mouse dari ketikan (Ink ikut menerima bytes-nya).
-  // Lengkap selalu dibuang; serpihan CSI + sisa trailer dibuang hanya
-  // sesaat setelah aktivitas mouse (agar tak menelan ketikan normal).
+  // Filter leftover mouse sequences out of typing (Ink receives the bytes too).
+  // Sequence lengkap + yatim (tanpa ESC) selalu dibuang; ekor parsial dibuang
+  // hanya sesaat setelah aktivitas mouse (agar tak menelan ketikan normal).
+  // Sekaligus: buka/tutup dropdown autocomplete "/" dan reset navigasi riwayat
+  // bila user mengetik sendiri (bukan dari navigasi ↑/↓).
   const onInputChange = useCallback((v: string) => {
     let c = stripMouseSequences(v);
     if (Date.now() - lastMouseAt.current < 300) {
       c = c.replace(/\x1b\[<?[\d;]*/g, "");
       c = c.replace(/^(?:\d+;){1,2}\d*[mM]/, "");
+      c = c.replace(/\[<?\d{0,4};?\d{0,4}$/, "");
     }
+    if (c !== navValueRef.current) histIdxRef.current = null;
+    navValueRef.current = null;
     setInput(c);
-  }, []);
+    if (dropdown === null || dropdown.type === "commands") {
+      const matches = suggestCommands(c);
+      if (matches.length === 0) {
+        if (dropdown !== null) setDropdown(null);
+      } else {
+        setDropdown({ type: "commands", title: "Commands", options: matches, selected: 0, onSelect: (opt) => setInput(`${opt} `) });
+      }
+    }
+  }, [dropdown]);
 
-  // Auto-submit prompt awal (mis. untuk demo / smoke test)
+  // Shell-style prompt-history navigation: ↑ = lebih lama, ↓ = lebih baru/draf.
+  const navHistory = (dir: -1 | 1): void => {
+    const h = histRef.current;
+    const next = historyStep(histIdxRef.current, dir, h.length);
+    if (next === null) {
+      if (histIdxRef.current !== null) {
+        histIdxRef.current = null;
+        navValueRef.current = draftRef.current;
+        setInput(draftRef.current);
+      }
+      return;
+    }
+    if (histIdxRef.current === null) draftRef.current = input;
+    histIdxRef.current = next;
+    navValueRef.current = h[next];
+    setInput(h[next]);
+  };
+
+  // Auto-submit the initial prompt (e.g. for demos / smoke tests)
   const bootRef = useRef(false);
   useEffect(() => {
     if (!bootRef.current && initialPrompt) {
@@ -1133,23 +1197,33 @@ interface PreviewState {
     bootRef.current = true;
   }, [initialPrompt, submit]);
 
-  // Spinner saat agent bekerja
+  // Spinner while the agent works
   useEffect(() => {
     if (!running) return;
     const t = setInterval(() => setSpin((s) => (s + 1) % SPIN.length), 120);
     return () => clearInterval(t);
   }, [running]);
 
-  // Klik mouse pada baris tool → pratinjau fullscreen.
+  // Mouse-click a tool row → pratinjau fullscreen.
+  // Wheel/gesture → scroll chat (or preview when open).
   // Listener sendiri di stdin mentah; Ink tetap menerima bytes-nya sehingga
   // filter di onChange + jendela escape di KeyHandler menangkal sampah ketik.
   useEffect(() => {
-    const parser = createMouseParser((c) => {
-      const st = clickRef.current;
-      if (!st || st.previewOpen) return;
-      const hit = st.rowMap.find((r) => c.y >= r.y0 && c.y < r.y1);
-      if (hit) openPreviewRef.current(hit.id);
-    });
+    const parser = createMouseParser(
+      (c) => {
+        lastSeqAt.current = Date.now();
+        const st = clickRef.current;
+        if (!st || st.previewOpen) return;
+        const hit = st.rowMap.find((r) => c.y >= r.y0 && c.y < r.y1);
+        if (hit) openPreviewRef.current(hit.id);
+      },
+      (dir) => {
+        lastSeqAt.current = Date.now();
+        const d = dir === "up" ? SCROLL_STEP : -SCROLL_STEP;
+        if (clickRef.current.previewOpen) setPreviewScroll((s) => Math.max(0, s + d));
+        else setScrollOffset((s) => Math.max(0, s + d));
+      },
+    );
     const onData = (chunk: Buffer) => {
       const s = chunk.toString("utf-8");
       // Selalu teruskan ke parser (sequence bisa terpotong antar chunk);
@@ -1165,13 +1239,13 @@ interface PreviewState {
 
   const usage = contextUsage(session.messages, session.model, session.provider);
   const visible = items.slice(cutoff).slice(-300);
-  // Brand besar tengah saat belum ada percakapan; header kecil biasa setelah ada chat.
+  // Big centered brand with no conversation yet; header kecil biasa setelah ada chat.
   const showBanner = !preview && !hasChatItems(visible);
   const projectName = workspaceDir.split("/").filter(Boolean).pop() || workspaceDir;
   const cols = Math.max(40, size.columns);
   const rows = Math.max(12, size.rows);
 
-  // Dropdown: tampilkan maksimal 8 opsi di sekitar pilihan (agar muat layar).
+  // Dropdown: show at most 8 options around the selection (to fit the screen).
   const DD_MAX = 8;
   let ddVisible: string[] = [];
   let ddOffset = 0;
@@ -1181,7 +1255,7 @@ interface PreviewState {
     ddVisible = dropdown.options.slice(ddOffset, ddOffset + DD_MAX);
   }
 
-  // Viewport manual arah normal: scrollOffset 0 = ekor (terbaru) menempel bawah.
+  // Manual normal-direction viewport: scrollOffset 0 = tail (newest) pinned bottom.
   // Naikkan scrollOffset untuk melihat riwayat lama; dijepit agar tak kosong.
   const CHROME_ROWS = 4 + 1 + 3 + 1; // header + margin + input + status
   const approvalRows = approval ? 5 : 0;
@@ -1201,11 +1275,10 @@ interface PreviewState {
     windowed = [sliceItemTail(anchor, avail, cols)];
   }
 
-  // ── Peta baris terminal → id tool untuk klik mouse (koordinat 1-based).
-  // Header = border(2) + judul + workspace; lalu margin chat.
-  const headerTitle = `sabana-code  ${projectName}  ${session.id.slice(0, 8)} • ${session.model}/${session.provider}`;
-  const headerRows = 2 + wrapRows(headerTitle, cols - 6) + wrapRows(workspaceDir, cols - 6);
-  const chatStartRow = headerRows + 1 + 1;
+  // ── Terminal row → tool id map for mouse clicks (1-based coordinates).
+  // Info header moved below the prompt for a clean top; chat selalu mulai
+  // di baris 2 (margin atas feed 1 baris).
+  const chatStartRow = 2;
   {
     let _y = chatStartRow;
     const rowMap: Array<{ y0: number; y1: number; id: string }> = [];
@@ -1219,7 +1292,7 @@ interface PreviewState {
   clickRef.current = { rowMap: rowMapRef.current, previewOpen: preview !== null };
   openPreviewRef.current = openPreviewById;
 
-  // ── Panel pratinjau fullscreen: border(2) + judul(1) + footer(1).
+  // ── Fullscreen preview panel: border(2) + title(1) + footer(1).
   const previewAvail = preview ? Math.max(5, rows - 4 - 1 - 4 - 1 - (approval ? 5 : 0)) : 0;
   let pvShown: HlSeg[][] = [];
   let pvStart = 0;
@@ -1254,17 +1327,6 @@ interface PreviewState {
 
   return (
     <Box flexDirection="column" width={cols} height={rows} paddingX={1}>
-      <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
-        <Box>
-          <Text>
-            <Text bold color="cyan">sabana-code</Text>
-            <Text bold>  {projectName}</Text>
-            <Text dimColor>  {session.id.slice(0, 8)} • {session.model}/{session.provider}</Text>
-          </Text>
-        </Box>
-        <Box><Text dimColor>{workspaceDir}</Text></Box>
-      </Box>
-
       <Box flexDirection="column" flexGrow={1} marginTop={1}>
         {preview ? (
           <Box key="__preview" borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column" flexGrow={1}>
@@ -1286,7 +1348,7 @@ interface PreviewState {
             ))}
             <Box marginTop={1}>
               <Text dimColor>
-                Esc tutup · ↑↓/PgUp/PgDn scroll{pvTotalRows > previewAvail ? ` · ↑${pvScrollClamped}/${pvTotalRows}` : ""}
+                Esc/q close · ↑↓/PgUp/PgDn scroll{pvTotalRows > previewAvail ? ` · ↑${pvScrollClamped}/${pvTotalRows}` : ""}
               </Text>
             </Box>
           </Box>
@@ -1315,7 +1377,7 @@ interface PreviewState {
           windowed.map((it, ri) => {
             const isStream = stream !== "" && start + ri === feed.length - 1;
             const key = isStream ? "__stream" : `${cutoff}-${start + ri}`;
-          // Info polos; user/assistant/tool masing-masing punya box + warna sendiri.
+          // Plain info; user/assistant/tool each get their own box + color.
           if (it.kind === "info") {
             return (
               <Box key={key}>
@@ -1354,25 +1416,25 @@ interface PreviewState {
         <Box marginTop={1} marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} paddingY={1} width={Math.min(cols - 4, 60)} flexDirection="column">
           <Box marginBottom={1}>
             <Text>
-              <Text bold color="cyan">{dropdown.type === "models" ? "Model" : "Provider"}</Text>
-              <Text dimColor>  ↑↓ pilih · Enter=pilih · Esc=batal</Text>
+              <Text bold color="cyan">{dropdown.title}</Text>
+              <Text dimColor>  ↑↓ navigate · Enter={dropdown.type === "commands" ? "run/complete" : "select"} · Esc=cancel</Text>
             </Text>
           </Box>
           {ddOffset > 0 && (
-            <Box><Text dimColor>  ↑ {ddOffset} lagi di atas…</Text></Box>
+            <Box><Text dimColor>  ↑ {ddOffset} more above…</Text></Box>
           )}
           {ddVisible.map((opt, vi) => {
             const idx = ddOffset + vi;
             return (
               <Box key={`${idx}-${opt}`}>
                 <Text color={dropdown.selected === idx ? "cyan" : undefined} dimColor={dropdown.selected !== idx}>
-                  {dropdown.selected === idx ? "► " : "  "}{opt}{dropdown.type === "models" && opt === session.model ? "  ← aktif" : dropdown.type === "providers" && opt === session.provider ? "  ← aktif" : ""}
+                  {dropdown.selected === idx ? "► " : "  "}{opt}{dropdown.type === "models" && opt === session.model ? "  ← active" : dropdown.type === "providers" && opt === session.provider ? "  ← active" : ""}
                 </Text>
               </Box>
             );
           })}
           {ddOffset + ddVisible.length < dropdown.options.length && (
-            <Box><Text dimColor>  ↓ {dropdown.options.length - ddOffset - ddVisible.length} lagi di bawah…</Text></Box>
+            <Box><Text dimColor>  ↓ {dropdown.options.length - ddOffset - ddVisible.length} more below…</Text></Box>
           )}
         </Box>
       )}
@@ -1387,20 +1449,31 @@ interface PreviewState {
             onSubmit={submit}
             focus={approval === null && preview === null}
             placeholder={
-              approval ? "Menunggu izin… (y/a/n)" : running ? "Agent bekerja… (Ctrl+C batal)" : "Tulis pesan atau /perintah…"
+              approval ? "Waiting for approval… (y/a/n)" : running ? "Agent working… (Ctrl+C cancels)" : "Type a message or /command…"
             }
           />
         </Box>
       )}
 
+      <Box marginTop={1} borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
+        <Box>
+          <Text>
+            <Text bold color="cyan">sabana-code</Text>
+            <Text bold>  {projectName}</Text>
+            <Text dimColor>  {session.id.slice(0, 8)} • {session.model}/{session.provider}</Text>
+          </Text>
+        </Box>
+        <Box><Text dimColor>{workspaceDir}</Text></Box>
+      </Box>
+
       {approval && (
         <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
           <Box>
-            <Text bold color="yellow">Izin terminal </Text>
+            <Text bold color="yellow">Terminal permission </Text>
             <Text>{approval.label}</Text>
           </Box>
           <Box>
-            <Text dimColor>[y] sekali   [a] {approval.scope}   [n] tolak</Text>
+            <Text dimColor>[y] once   [a] {approval.scope}   [n] deny</Text>
           </Box>
         </Box>
       )}
@@ -1409,18 +1482,24 @@ interface PreviewState {
         <Text dimColor>
           ctx ~{usage.tokens.toLocaleString()}/{usage.window.toLocaleString()} ({usage.pct.toFixed(0)}%)
           {"  "}• {session.filesModified.length} files • /help
-          {scroll > 0 ? ` • ↑${scroll} (↓ ke bawah)` : ""}
+          {scroll > 0 ? ` • ↑${scroll} (PgDn/wheel down)` : ""}
         </Text>
       </Box>
 
       {isRawModeSupported && <KeyHandler onKey={(inp, key) => {
         if (process.env.SABANA_DEBUG_INPUT) flog("input", `inp=${JSON.stringify(inp)} key=${JSON.stringify(key)}`);
-        // Artefak escape dari sequence mouse (klik ditangani parser sendiri).
-        if (key.escape && Date.now() - lastMouseAt.current < 120) return;
-        // Pratinjau fullscreen: Esc/Ctrl+C menutup; panah scroll; lainnya abaikan.
+        // Escape artifacts from complete mouse sequences (klik/wheel ditangani
+        // parser sendiri). Jendela sempit + berbasis sequence (bukan chunk)
+        // so real Esc is never eaten.
+        if (key.escape && Date.now() - lastSeqAt.current < 150) return;
+        // Pratinjau fullscreen: Esc/Ctrl+C/q menutup; panah scroll; lainnya abaikan.
         // (pakai state `preview` langsung — closure ini dibuat ulang tiap render,
         // jadi selalu segar; ref terpisah rawan lupa di-sync dan bikin Esc mati.)
         if (preview) {
+          if ((inp === "q" || inp === "Q") && !approvalActive.current) {
+            closePreview();
+            return;
+          }
           const act = previewKeyAction(inp, key);
           if (act === "close") {
             closePreview();
@@ -1462,6 +1541,12 @@ interface PreviewState {
           }
           if (key.return) {
             const sel = dropdown.options[dropdown.selected];
+            // Commands: Enter saat input sudah persis = JALANKAN; selain itu = lengkapi.
+            if (dropdown.type === "commands" && input.trim() === sel) {
+              closeDropdown();
+              submit(input);
+              return;
+            }
             dropdown.onSelect(sel);
             closeDropdown();
             return;
@@ -1474,7 +1559,7 @@ interface PreviewState {
           return;
         }
         if (approvalActive.current) {
-          // Scroll tetap boleh saat box izin tampil (y/a/n tidak bentrok).
+          // Scrolling stays allowed while the approval box shows (y/a/n never clash).
           if (key.upArrow) {
             setScrollOffset((s) => s + SCROLL_STEP);
             return;
@@ -1495,15 +1580,15 @@ interface PreviewState {
             // Allow escape to exit even in approval mode
           }
         }
-        // Chat history scrolling (saat tidak ada dropdown/modal).
-        // ↑ = lihat riwayat lama, ↓ = kembali ke bawah.
+        // Input prompt (saat tidak ada dropdown/modal):
+        // ↑/↓ = riwayat prompt (ala shell), PgUp/PgDn = scroll chat.
         if (!approvalActive.current && !dropdown) {
           if (key.upArrow) {
-            setScrollOffset((s) => s + SCROLL_STEP);
+            navHistory(-1);
             return;
           }
           if (key.downArrow) {
-            setScrollOffset((s) => Math.max(0, s - SCROLL_STEP));
+            navHistory(1);
             return;
           }
           if (key.pageUp) {
@@ -1520,7 +1605,7 @@ interface PreviewState {
           if (approvalActive.current) answerApproval("cancel");
           if (runningRef.current) {
             agentRef.current?.abortRun();
-            push({ kind: "info", tone: "yellow", text: "Membatalkan turn…" });
+            push({ kind: "info", tone: "yellow", text: "Cancelling turn…" });
           } else {
             const a = agentRef.current;
             saveSession({ ...sessionRef.current, approvals: a ? a.getApprovals() : sessionRef.current.approvals });
@@ -1528,7 +1613,7 @@ interface PreviewState {
           }
           return;
         }
-        // Saat menunggu izin: y = sekali, a = semua serupa, n/Esc = tolak.
+        // While waiting approval: y = once, a = all similar, n/Esc = deny.
         if (approvalActive.current) {
           const c = inp.toLowerCase();
           if (c === "y") answerApproval("once");

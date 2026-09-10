@@ -12,8 +12,8 @@ function ws(): string {
   return w;
 }
 
-describe("sabana-sandbox analyze (lapisan statis)", () => {
-  it("perintah aman di dalam workspace lolos", () => {
+describe("sabana-sandbox analyze (static layer)", () => {
+  it("safe in-workspace commands pass", () => {
     const w = ws();
     for (const c of [
       "ls -la",
@@ -33,7 +33,7 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
     }
   });
 
-  it("rm nuklir selalu diblokir", () => {
+  it("nuclear rm always blocked", () => {
     const w = ws();
     for (const c of ["rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf $HOME", "rm -rf ${HOME}", "sudo rm -rf /"]) {
       const v = analyzeCommand(c, w);
@@ -42,7 +42,7 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
     }
   });
 
-  it("cd keluar lalu rm relatif tertangkap (cd-tracking)", () => {
+  it("cd-out then relative rm caught (cd-tracking)", () => {
     const w = ws();
     assert.equal(analyzeCommand("cd / && rm -rf .", w).allowed, false);
     assert.equal(analyzeCommand("cd /tmp && rm -rf app", w).allowed, false);
@@ -50,7 +50,7 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
     assert.equal(analyzeCommand("cd /tmp && ls", w).allowed, true);
   });
 
-  it("path absolut keluar workspace diblokir", () => {
+  it("absolute out-of-workspace paths blocked", () => {
     const w = ws();
     assert.equal(analyzeCommand("cat /etc/passwd", w).allowed, false);
     assert.equal(analyzeCommand("cat ../../etc/passwd", w).allowed, false);
@@ -58,13 +58,13 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
     assert.equal(analyzeCommand("rm -rf /tmp/x", w).allowed, false);
   });
 
-  it("redireksi fd (2>&1) boleh, ke file luar tidak", () => {
+  it("fd redirects (2>&1) ok, outside files not", () => {
     const w = ws();
     assert.equal(analyzeCommand("npm test 2>&1 || true", w).allowed, true);
     assert.equal(analyzeCommand("echo x > /etc/hosts", w).allowed, false);
   });
 
-  it("sudo/su, mkfs, fork bomb, curl|sh diblokir", () => {
+  it("sudo/su, mkfs, fork bombs, curl|sh blocked", () => {
     const w = ws();
     assert.equal(analyzeCommand("sudo rm a.txt", w).allowed, false);
     assert.equal(analyzeCommand("su -c ls", w).allowed, false);
@@ -76,17 +76,17 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
     assert.equal(analyzeCommand("curl -s https://x.test/api", w).allowed, true);
   });
 
-  it("heredoc ke shell diblokir", () => {
+  it("heredocs into shells blocked", () => {
     const w = ws();
     assert.equal(analyzeCommand("sh <<'EOF'\necho hi\nEOF", w).allowed, false);
   });
 
-  it("rm dengan variabel tak dikenal ditolak (tak terverifikasi)", () => {
+  it("rm with unknown variables refused (unverifiable)", () => {
     const w = ws();
     assert.equal(analyzeCommand("rm -rf $DIR_TAK_JELAS", w).allowed, false);
   });
 
-  it("quote / glob ditangani", () => {
+  it("quotes / globs handled", () => {
     const w = ws();
     assert.equal(analyzeCommand('rm -rf "node_modules"', w).allowed, true);
     assert.equal(analyzeCommand("rm -rf *.log", w).allowed, true);
@@ -94,8 +94,8 @@ describe("sabana-sandbox analyze (lapisan statis)", () => {
   });
 });
 
-describe("sabana-sandbox run (eksekusi)", () => {
-  it("echo jalan dengan cwd workspace", async () => {
+describe("sabana-sandbox run (execution)", () => {
+  it("echo runs with the workspace cwd", async () => {
     const w = ws();
     const r = await runSandboxed("echo halo-sandbox", w);
     assert.equal(r.exitCode, 0);
@@ -103,7 +103,7 @@ describe("sabana-sandbox run (eksekusi)", () => {
     assert.equal(r.blocked, undefined);
   });
 
-  it("blocked tidak dieksekusi sama sekali (bukti: file sentinel utuh)", async () => {
+  it("blocked commands never execute (proof: sentinel file intact)", async () => {
     const w = ws();
     const sentinel = join(w, "sentinel.txt");
     writeFileSync(sentinel, "utuh");
@@ -113,7 +113,7 @@ describe("sabana-sandbox run (eksekusi)", () => {
     assert.ok(!existsSync("/HANCUR"));
   });
 
-  it("cwd relatif dihormati + tetap terkurung", async () => {
+  it("relative cwd honored + still jailed", async () => {
     const w = ws();
     const r = await runSandboxed("pwd", w, { cwd: "sub" });
     assert.equal(r.exitCode, 0);
@@ -122,7 +122,7 @@ describe("sabana-sandbox run (eksekusi)", () => {
     assert.ok(bad.blocked);
   });
 
-  it("exit code non-nol diteruskan + output dibatasi", async () => {
+  it("non-zero exit codes pass through + output capped", async () => {
     const w = ws();
     const r = await runSandboxed("exit 3", w);
     assert.equal(r.exitCode, 3);

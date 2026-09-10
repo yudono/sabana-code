@@ -1,37 +1,37 @@
-// ─── Compact: ringkas riwayat jadi satu pesan agar konteks muat ───
-// Dipakai manual via /compact dan otomatis saat menyentuh >80% window.
+// ─── Compact: summarize history into one message to fit context ───
+// Used manually via /compact and automatically past 80% window.
 import type { ModelMessage } from "../llm/types.js";
 
-/** Ambang auto-compact (% context window). */
+/** Auto-compact threshold (% of context window). */
 export const AUTO_COMPACT_PCT = 80;
 
-/** Jumlah pesan terakhir yang dipertahankan apa adanya setelah ringkasan. */
+/** Number of trailing messages kept intact after the summary. */
 export const COMPACT_KEEP_LAST = 6;
 
-const COMPACT_INSTRUCTION = `Kamu adalah peringkas konteks untuk coding agent. Ringkas riwayat percakapan di bawah menjadi rangkuman padat (maks ~400 kata, Bahasa Indonesia boleh campur istilah teknis Inggris).
+const COMPACT_INSTRUCTION = `You are a context summarizer for a coding agent. Summarize the conversation history below into a dense summary (max ~400 words, English).
 
-Wajib mencakup:
-1. Tujuan user & status terakhir (selesai / belum, apa yang kurang).
-2. Keputusan penting (model, library, pendekatan yang dipilih dan kenapa).
-3. File yang dibuat/diubah + perubahan kuncinya.
-4. Error/loop yang terjadi + cara mengatasinya (agar tidak diulang).
-5. Langkah berikutnya yang direncanakan.
+Must cover:
+1. User goal & latest status (done / pending, what is missing).
+2. Key decisions (model, library, chosen approach and why).
+3. Files created/modified + their key changes.
+4. Errors/loops encountered + how they were handled (so they are not repeated).
+5. Planned next steps.
 
-Tulis HANYA rangkuman, tanpa basa-basi pembuka/penutup.`;
+Write ONLY the summary, no opening/closing pleasantries.`;
 
 function clip(s: string, n: number): string {
   const t = (s || "").trim();
   return t.length > n ? t.slice(0, n) + "…" : t;
 }
 
-/** Bangun prompt ringkasan dari transkrip (dipotong agar request-nya sendiri ringan). */
+/** Build the summary prompt from the transcript (clipped to keep the request itself light). */
 export function buildCompactPrompt(messages: ModelMessage[]): string {
   const body = messages.filter((m) => m.role !== "system");
   const lines = body.map((m) => {
     const tools = m.tool_calls?.length ? ` [tools: ${m.tool_calls.map((t) => t.function.name).join(",")}]` : "";
     return `[${m.role}]${tools}\n${clip(m.content || "", 1200)}`;
   });
-  return `${COMPACT_INSTRUCTION}\n\n--- RIWAYAT ---\n${lines.join("\n\n")}`.slice(0, 14_000);
+  return `${COMPACT_INSTRUCTION}\n\n--- HISTORY ---\n${lines.join("\n\n")}`.slice(0, 14_000);
 }
 
 export interface CompactApplied {
@@ -40,8 +40,8 @@ export interface CompactApplied {
 }
 
 /**
- * Terapkan ringkasan: system[0] + pesan ringkasan + N pesan terakhir.
- * Mencegah tool-result yatim di awal (tanpanya API menolak riwayat).
+ * Apply the summary: system[0] + summary message + last N messages.
+ * Prevents orphan tool results at the start (without this the API rejects history).
  */
 export function applyCompactSummary(
   messages: ModelMessage[],
@@ -56,7 +56,7 @@ export function applyCompactSummary(
     ...system,
     {
       role: "user",
-      content: `## RINGKASAN KONTEKS SEBELUMNYA\n${summary.trim()}\n\nLanjutkan pekerjaan dari ringkasan ini.`,
+      content: `## PREVIOUS CONTEXT SUMMARY\n${summary.trim()}\n\nContinue the work from this summary.`,
     },
     ...tail,
   ];

@@ -1,8 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildSkillsContext, listSkills, loadSkill, skillHandler } from "../src/skills.js";
 import { closeDb } from "../src/db.js";
 
@@ -23,13 +24,13 @@ Aturan main.
 `;
 
 describe("skills", () => {
-  it("list kosong bila tak ada skill", () => {
+  it("empty list when no skills exist", () => {
     isolatedHome();
     assert.deepEqual(listSkills(), []);
     assert.equal(buildSkillsContext(), "");
   });
 
-  it("baca skill global dari ~/sabana-code/skills", () => {
+  it("reads global skills from ~/sabana-code/skills", () => {
     const home = isolatedHome();
     mkdirSync(join(home, "skills"), { recursive: true });
     writeFileSync(join(home, "skills", "commit.md"), SKILL_MD);
@@ -40,7 +41,7 @@ describe("skills", () => {
     assert.ok(list[0].instructions.includes("Aturan main"));
   });
 
-  it("skill project menimpa global bila nama sama", () => {
+  it("project skills override global ones on name clash", () => {
     const home = isolatedHome();
     mkdirSync(join(home, "skills"), { recursive: true });
     writeFileSync(join(home, "skills", "commit.md"), SKILL_MD);
@@ -54,14 +55,14 @@ describe("skills", () => {
     assert.ok(buildSkillsContext(ws).includes("commit"));
   });
 
-  it("skillHandler: nama invalid & tak ada ditolak jelas", async () => {
+  it("skillHandler: invalid & missing names rejected clearly", async () => {
     isolatedHome();
     const h = skillHandler("/tmp");
     assert.ok((await h({ name: "../../x" }) as { error: string }).error.includes("Invalid"));
-    assert.ok((await h({ name: "takada" }) as { error: string }).error.includes("tidak ada"));
+    assert.ok((await h({ name: "takada" }) as { error: string }).error.includes("not found"));
   });
 
-  it("skillHandler: muat isi penuh", async () => {
+  it("skillHandler: loads full content", async () => {
     const home = isolatedHome();
     mkdirSync(join(home, "skills"), { recursive: true });
     writeFileSync(join(home, "skills", "commit.md"), SKILL_MD);
@@ -76,5 +77,19 @@ describe("skills", () => {
     mkdirSync(join(home, "skills"), { recursive: true });
     writeFileSync(join(home, "skills", "commit.md"), SKILL_MD);
     assert.ok(loadSkill("COMMIT"));
+  });
+
+  it("built-in skills ship valid frontmatter + instructions", () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "skills");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    assert.ok(files.length >= 8, `expected 8+ built-in skills, got ${files.length}`);
+    for (const f of files) {
+      const raw = readFileSync(join(dir, f), "utf-8");
+      const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+      assert.ok(m, `${f}: missing frontmatter`);
+      assert.match(m[1], /name:\s*\S+/, `${f}: missing name`);
+      assert.match(m[1], /description:\s*\S+/, `${f}: missing description`);
+      assert.ok((m[2] || "").trim().length > 100, `${f}: instructions too short`);
+    }
   });
 });

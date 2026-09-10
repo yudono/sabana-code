@@ -1,7 +1,7 @@
-// ─── Session store global: ~/sabana-code/sessions/<uuid>.json ───
-// Tiap new session / prompt baru tersimpan di sini (history + konteks),
-// bisa dilanjutkan dari direktori mana pun (mirip opencode / claude-code).
-// Index ringan disalin ke sqlite (~/sabana-code/sabana.db) untuk listing cepat.
+// ─── Global session store: ~/sabana-code/sessions/<uuid>.json ───
+// Every new session / prompt is stored here (history + context),
+// resumable from any directory (like opencode / claude-code).
+// A light index is mirrored to sqlite (~/sabana-code/sabana.db) for fast listing.
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -20,9 +20,9 @@ export interface Session {
   model: string;
   provider: string;
   workspaceDir: string;
-  /** ID project (hash path) — satu project bisa punya banyak session. */
+  /** Project ID (path hash) — one project can own many sessions. */
   projectId: string;
-  /** Keputusan izin terminal/file per session (allow all/deny). Session baru = kosong. */
+  /** Per-session terminal/file permission decisions (allow all/deny). New sessions start empty. */
   approvals: ApprovalState;
   messages: ModelMessage[];
   filesModified: string[];
@@ -55,7 +55,7 @@ export function createSession(model: string, provider: string, workspaceDir: str
   const now = new Date().toISOString();
   return {
     id: newSessionId(),
-    title: "Sesi baru",
+    title: "New session",
     createdAt: now,
     updatedAt: now,
     model,
@@ -72,10 +72,10 @@ export function saveSession(s: Session): void {
   s.updatedAt = new Date().toISOString();
   if (!s.projectId) s.projectId = projectIdFor(s.workspaceDir);
   registerProject(s.workspaceDir);
-  if (s.title === "Sesi baru") {
+  if (s.title === "New session") {
     const firstUser = s.messages.find((m) => m.role === "user");
     if (firstUser) {
-      // Pesan user pertama bisa berupa blob konteks awal ("## USER REQUEST\n<prompt>...").
+      // The first user message may be an initial-context blob ("## USER REQUEST\n<prompt>...").
       const lines = firstUser.content.split("\n");
       const reqIdx = lines.findIndex((l) => l.trim() === "## USER REQUEST");
       const raw = reqIdx >= 0 ? lines[reqIdx + 1] || "" : lines[0] || "";
@@ -84,7 +84,7 @@ export function saveSession(s: Session): void {
     }
   }
   writeFileSync(join(dir(), `${s.id}.json`), JSON.stringify(s, null, 2));
-  // Sinkron index sqlite (best-effort)
+  // Sync the sqlite index (best-effort)
   try {
     const usage = contextUsage(s.messages, s.model, s.provider);
     upsertSessionMeta({
@@ -100,19 +100,19 @@ export function saveSession(s: Session): void {
       est_tokens: usage.tokens,
     });
   } catch {
-    /* index opsional */
+    /* index is optional */
   }
 }
 
 export function loadSession(id: string): Session | null {
-  // Dukung UUID penuh maupun prefix (seperti git short hash)
+  // Supports full UUIDs and prefixes (like git short hashes)
   const files = readdirSync(dir()).filter((f) => f.endsWith(".json"));
   const match = files.find((f) => f === `${id}.json`) || files.find((f) => f.startsWith(id));
   if (!match) return null;
   try {
     const s = JSON.parse(readFileSync(join(dir(), match), "utf-8")) as Session;
-    if (!s.projectId) s.projectId = projectIdFor(s.workspaceDir); // backfill session lama
-    if (!s.approvals) s.approvals = emptyApprovals(); // backfill: izin lama tidak dibawa
+    if (!s.projectId) s.projectId = projectIdFor(s.workspaceDir); // backfill old sessions
+    if (!s.approvals) s.approvals = emptyApprovals(); // backfill: old approvals are not carried over
     return s;
   } catch {
     return null;
@@ -124,7 +124,7 @@ export function sessionExists(id: string): boolean {
 }
 
 export function listSessions(): SessionSummary[] {
-  // Sumber utama: sqlite (cepat); fallback: scan file bila db kosong.
+  // Primary source: sqlite (fast); fallback: file scan when db is empty.
   try {
     const rows = listSessionMeta(50);
     if (rows.length > 0) {
@@ -159,7 +159,7 @@ export function listSessions(): SessionSummary[] {
         turns: s.messages.filter((m) => m.role === "user").length,
       });
     } catch {
-      /* lewati file rusak */
+      /* skip corrupt files */
     }
   }
   return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));

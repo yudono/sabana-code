@@ -14,6 +14,6 @@ export function flog(scope: string, message: string): void {
     const line = `${new Date().toISOString()} [${scope}] ${message.replace(/\n/g, " ").slice(0, 2000)}\n`;
     appendFileSync(join(logsDir(), `${today()}.log`), line);
   } catch {
-    /* log tak boleh merusak jalan utama */
+    /* logging must never break the main flow */
   }
 }

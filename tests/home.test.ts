@@ -31,7 +31,7 @@ function isolatedHome(): string {
 }
 
 describe("global home", () => {
-  it("membuat struktur ~/sabana-code (sessions, logs, db)", () => {
+  it("creates the ~/sabana-code structure (sessions, logs, db)", () => {
     const home = isolatedHome();
     assert.equal(sabanaHome(), home);
     ensureHome();
@@ -40,13 +40,13 @@ describe("global home", () => {
     assert.ok(dbPath().endsWith("sabana.db"));
   });
 
-  it("session id berupa UUID", () => {
+  it("session ids are UUIDs", () => {
     isolatedHome();
     const s = createSession("m", "mock", "/tmp");
     assert.match(s.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
-  it("save session menulis JSON + index sqlite", () => {
+  it("saving a session writes JSON + sqlite index", () => {
     isolatedHome();
     const s = createSession("gpt-4o-mini", "openai", "/tmp/ws");
     s.messages.push({ role: "user", content: "halo bench" });
@@ -60,7 +60,7 @@ describe("global home", () => {
 });
 
 describe("settings.json (new multi-provider format)", () => {
-  it("default belum lengkap (tanpa API key) → lengkap setelah diisi", () => {
+  it("defaults incomplete (no API key) → complete once filled", () => {
     isolatedHome();
     const d = defaultSettings();
     assert.equal(d.default_provider, "openai");
@@ -82,7 +82,7 @@ describe("settings.json (new multi-provider format)", () => {
     assert.equal(back.default_provider, "openai");
   });
 
-  it("ollama/mock lengkap tanpa key; custom butuh URL", () => {
+  it("ollama/mock complete without keys; custom needs a URL", () => {
     isolatedHome();
     const s = defaultSettings();
     s.default_provider = "ollama";
@@ -110,7 +110,7 @@ describe("settings.json (new multi-provider format)", () => {
 });
 
 describe("auth resolution", () => {
-  it("env asli menang atas settings", () => {
+  it("real env wins over settings", () => {
     isolatedHome();
     const s = defaultSettings();
     s.providers.openai.apiKey = "sk-settings";
@@ -125,7 +125,7 @@ describe("auth resolution", () => {
     }
   });
 
-  it("fallback ke settings.providers[name]", () => {
+  it("falls back to settings.providers[name]", () => {
     isolatedHome();
     delete process.env.OPENAI_KEY;
     const s = defaultSettings();
@@ -140,7 +140,7 @@ describe("auth resolution", () => {
     assert.equal(extra.source, "global");
   });
 
-  it("mock/ollama tak butuh key", () => {
+  it("mock/ollama need no key", () => {
     isolatedHome();
     assert.notEqual(resolveCredentials("mock").source, "none");
   });

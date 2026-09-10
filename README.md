@@ -32,6 +32,8 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
 - **Skills** — reusable work instructions in `~/sabana-code/skills/*.md` or
   `<project>/.sabana/skills/*.md` (project overrides global). The agent auto-loads
   matching skills via the `skill` tool (`/skills`, `/skill <name>`).
+  Built in: `commit`, `review-pr`, `qa`, `fullstack`, `frontend`, `security`,
+  `anti-slop`, `copywriter`.
 - **MCP servers** — connect any Model Context Protocol server via `~/sabana-code/mcp.json`;
   their tools appear as `mcp__<server>__<tool>` and work like built-in tools (`/mcp`, `/mcp reload`).
 - **Todo queue** — the agent plans multi-step work with `todo_write`/`todo_list`,
@@ -43,9 +45,14 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
   Switch anytime without losing history; model list is fetched live from `/v1/models`.
 - **Auto-compact context** — when context hits >80% of the window, older messages
   are automatically summarized into one; can also be triggered manually via `/compact`.
-- **Guardrails** — blocks prompt injection, XSS, private keys, oversized prompts; secrets in tool
-  output are redacted before reaching the LLM context.
-- **Rate limiting** — LLM requests per minute cap (default 60, configurable) + exponential backoff on 429/5xx.
+- **Guardrails** — blocks prompt injection (ignore/reveal/role-hijack/context-dump),
+  XSS, pasted private keys, sensitive-file references, and literal destructive shell;
+  `read_file`/`grep` refuse private key material (`~/.ssh/id_*`, `/etc/shadow`,
+  `*.pem`, `*.key`); secrets in tool output are redacted (OpenAI, Gemini, AWS,
+  Stripe, GitHub, npm, Slack, Bearer) before reaching the LLM context.
+- **Rate limiting** — LLM requests per minute cap (default 60, configurable) with
+  sliding window; exponential backoff + jitter on 429/5xx; per-call LLM timeout
+  (default 120s, hung providers fail fast instead of hanging the turn).
 
 ## Requirements
 
@@ -74,7 +81,7 @@ On first run, `sabana-code` initializes the global home:
   sessions/<uuid>.json chat history + context per session
   projects/<hash>/     metadata per project folder (one project can have many sessions)
   agents/*.md          custom sub-agent profiles (reviewer, security, …)
-  skills/*.md          reusable work instructions (commit, review-pr, …)
+  skills/*.md          reusable work instructions (commit, review-pr, qa, …)
   mcp.json             MCP server configs (stdio)
   todos/<hash>.json    todo queue per project
   checkpoints/<uuid>/  file + history snapshots per session
@@ -210,14 +217,22 @@ Each running server contributes its tools as `mcp__<server>__<tool>`. Check stat
 `/mcp`, reload after editing the file with `/mcp reload`. A server that fails to
 start is marked down and the agent keeps working without its tools.
 
-## Security: guardrails & rate limiting
+## Security: guardrails, sandbox & limits
 
-- **Input**: prompts containing *ignore instructions*, *reveal system prompt*,
-  private keys, `<script>` tags, or exceeding 50,000 characters are blocked immediately.
-- **Output**: API keys/tokens/private keys found by tools in files/logs are redacted
-  (`[REDACTED_*]`) before being passed to the LLM.
+- **Input**: prompts attempting *prompt injection* (ignore/reveal/role-hijack/DAN),
+  *conversation dumps*, pasted *private keys*, *sensitive key-file references*
+  (`~/.ssh/id_*`, `/etc/shadow`), *literal destructive shell* (`rm -rf /`, `mkfs`,
+  fork bombs), `<script>` tags, or exceeding 50,000 characters are blocked immediately.
+- **Output**: secrets found by tools in files/logs are redacted before reaching the LLM —
+  OpenAI, Gemini, AWS (AKIA + secret key), Stripe, GitHub, npm, Slack, Bearer tokens,
+  generic `key=`/`secret=` assignments, and whole private-key blocks (`[REDACTED_*]`).
+- **Sensitive files**: `read_file`/`grep` refuse SSH private keys, `/etc/shadow`,
+  `*.pem`, `*.key` — private key material can never enter LLM context.
+- **Timeouts**: every LLM call has a 120s timeout (hung providers fail the turn fast
+  instead of hanging forever); tool calls have per-tool timeouts (shell 180s);
+  MCP servers have per-server timeouts. Timeouts are never retried blindly.
 - **Rate limit**: each turn waits for a slot (default 60 req/min, configurable via `SABANA_RPM`);
-  429/quota/5xx/timeout errors are retried automatically with exponential backoff.
+  429/quota/5xx/network errors are retried automatically with exponential backoff + jitter.
 - **Sandbox path**: filesystem tools can only access the workspace (`safePath`);
   `shell` commands that hang the loop (dev servers, `sleep`, background `&`) are blocked.
 - **sabana-sandbox** (`src/sabana-sandbox.ts`): every `shell` command runs through a

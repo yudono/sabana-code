@@ -1,4 +1,4 @@
-// ─── Tool types — diadaptasi dari sabana-dev apps/api/src/agents/core/types.ts ───
+// ─── Tool types — adapted from sabana-dev apps/api/src/agents/core/types.ts ───
 
 export type RiskLevel = "safe" | "moderate" | "dangerous";
 export type PermissionDecision = "allow" | "ask" | "deny";

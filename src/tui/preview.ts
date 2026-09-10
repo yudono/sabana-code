@@ -1,8 +1,8 @@
-// ─── Resolver konten pratinjau fullscreen untuk baris tool ───
-// read_file/write_file  → baca LIVE dari disk (segar, termasuk edit susulan).
-// modified_file         → diff tersimpan saat eksekusi (old content sudah hilang).
-// delete_file           → catatan penghapusan tersimpan.
-// shell                 → stdout/stderr tersimpan. Lainnya → output mentah.
+// ─── Fullscreen preview content resolver for tool rows ───
+// read_file/write_file  → read LIVE from disk (fresh, incl. later edits).
+// modified_file         → diff stored at execution (old content is gone).
+// delete_file           → stored deletion note.
+// shell                 → stored stdout/stderr. Others → raw output.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { safePath } from "../tools/sandbox.js";
@@ -30,7 +30,7 @@ function capBody(s: string): string {
     body = body.slice(0, PREVIEW_CHARS_CAP);
     cut = true;
   }
-  return cut ? body + "\n… [dipotong]" : body;
+  return cut ? body + "\n… [truncated]" : body;
 }
 
 function withLineNumbers(content: string): string {
@@ -58,21 +58,21 @@ function readDiskFile(
   const full = safePath(workspaceDir, path);
   if (!full) return { ok: false, error: `Path escapes workspace: ${path}` };
   try {
-    if (!existsSync(full)) return { ok: false, error: `File tidak ada (mungkin sudah dihapus): ${path}` };
+    if (!existsSync(full)) return { ok: false, error: `File missing (may have been deleted): ${path}` };
     if (statSync(full).isDirectory()) return { ok: false, error: `Is a directory: ${path}` };
     const content = readFileSync(full, "utf-8");
-    if (content.includes("\0")) return { ok: false, error: `File biner — pratinjau teks dinonaktifkan: ${path}` };
+    if (content.includes("\0")) return { ok: false, error: `Binary file — text preview disabled: ${path}` };
     return { ok: true, content };
   } catch (e) {
-    return { ok: false, error: `Gagal baca: ${(e as Error).message}` };
+    return { ok: false, error: `Read failed: ${(e as Error).message}` };
   }
 }
 
 function storedFallback(path: string, stored: string | undefined): string {
-  return stored && stored.trim() ? stored : `(tidak ada output tersimpan untuk ${path})`;
+  return stored && stored.trim() ? stored : `(no stored output for ${path})`;
 }
 
-/** Bangun konten pratinjau dari item tool. Pure kecuali baca disk untuk read/write. */
+/** Build preview content from a tool item. Pure except disk reads for read/write. */
 export function buildPreviewForTool(
   item: { name: string; preview: PreviewRef; summary: string; output?: string },
   workspaceDir: string,
@@ -88,7 +88,7 @@ export function buildPreviewForTool(
       const r = readDiskFile(workspaceDir, path);
       if (!r.ok) {
         const fb = storedFallback(path, item.output);
-        return { title, lang: "plain", body: cap(`${r.error}${fb ? `\n\n--- output tersimpan ---\n${fb}` : ""}`) };
+        return { title, lang: "plain", body: cap(`${r.error}${fb ? `\n\n--- stored output ---\n${fb}` : ""}`) };
       }
       return { title, lang: detectLangFromContent(path, r.content), body: cap(withLineNumbers(r.content)) };
     }
@@ -102,7 +102,7 @@ export function buildPreviewForTool(
           : p && typeof p === "object" && typeof (p as { diff?: unknown }).diff === "string"
             ? ((p as { diff: string }).diff as string)
             : undefined;
-      if (!diff) return { title, lang: "plain", body: "Diff tidak tersimpan untuk panggilan ini." };
+      if (!diff) return { title, lang: "plain", body: "No stored diff for this call." };
       return { title, lang: "diff", body: cap(diff) };
     }
 
@@ -112,15 +112,15 @@ export function buildPreviewForTool(
       if (p && typeof p === "object") {
         const r = p as Record<string, unknown>;
         if (typeof r.error === "string") {
-          return { title, lang: "plain", body: cap(`Gagal menghapus ${path}:\n${r.error}`) };
+          return { title, lang: "plain", body: cap(`Failed to delete ${path}:\n${r.error}`) };
         }
         return {
           title,
           lang: "plain",
-          body: `Dihapus: ${path}${r.directory ? " (direktori kosong)" : ""}`,
+          body: `Deleted: ${path}${r.directory ? " (empty directory)" : ""}`,
         };
       }
-      return { title, lang: "plain", body: cap(`Dihapus: ${path}`) };
+      return { title, lang: "plain", body: cap(`Deleted: ${path}`) };
     }
 
     case "shell": {
@@ -142,7 +142,7 @@ export function buildPreviewForTool(
       } else if (typeof p === "string" && p) {
         lines.push(stripAnsi(p));
       } else {
-        lines.push("(tidak ada output tersimpan)");
+        lines.push("(no stored output)");
       }
       return { title, lang: "plain", body: cap(lines.join("\n")) };
     }
@@ -151,7 +151,7 @@ export function buildPreviewForTool(
       const p = parseStored(item.output);
       const body =
         p === undefined
-          ? "(tidak ada output tersimpan)"
+          ? "(no stored output)"
           : typeof p === "string"
             ? p
             : typeof (p as { content?: unknown }).content === "string"
@@ -167,7 +167,7 @@ export function buildPreviewForTool(
       const p = parseStored(item.output);
       const body =
         p === undefined
-          ? "(tidak ada output tersimpan)"
+          ? "(no stored output)"
           : typeof p === "string"
             ? p
             : JSON.stringify(p, null, 2);
@@ -179,7 +179,7 @@ export function buildPreviewForTool(
       const p = parseStored(item.output);
       const body =
         p === undefined
-          ? "(tidak ada output tersimpan)"
+          ? "(no stored output)"
           : typeof p === "string"
             ? p
             : JSON.stringify(p, null, 2);

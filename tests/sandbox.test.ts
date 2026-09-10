@@ -8,25 +8,25 @@ import { safePath } from "../src/tools/sandbox.js";
 describe("sandbox safePath", () => {
   const ws = mkdtempSync(join(tmpdir(), "sc-sandbox-"));
 
-  it("mengizinkan path relatif di dalam workspace", () => {
+  it("allows relative paths inside the workspace", () => {
     const p = safePath(ws, "src/a.txt");
     assert.ok(p && p.startsWith(ws));
   });
 
-  it("memblokir traversal ../ keluar workspace", () => {
+  it("blocks ../ traversal outside the workspace", () => {
     assert.equal(safePath(ws, "../evil.txt"), null);
     assert.equal(safePath(ws, "a/../../evil.txt"), null);
   });
 
-  it("memblokir absolute path di luar workspace", () => {
+  it("blocks absolute paths outside the workspace", () => {
     assert.equal(safePath(ws, "/etc/passwd"), null);
   });
 
-  it("mengizinkan '.' sebagai workspace root", () => {
+  it("allows '.' as workspace root", () => {
     assert.equal(safePath(ws, "."), ws);
   });
 
-  it("mengupas prefix sandbox/ karena workspace IS root", () => {
+  it("strips the sandbox/ prefix because workspace IS root", () => {
     const p = safePath(ws, "sandbox/src/a.txt");
     assert.ok(p && p.startsWith(ws) && !p.includes("sandbox/sandbox"));
   });

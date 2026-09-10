@@ -1,16 +1,16 @@
-// ─── Web tools — search internet + fetch ───
-// search diadaptasi dari sabana-dev apps/web/app/lib/tavily.server.ts
-// dengan fallback DuckDuckGo bila TAVILY_API_KEY kosong.
+// ─── Web tools — internet search + fetch ───
+// search adapted from sabana-dev apps/web/app/lib/tavily.server.ts
+// with DuckDuckGo fallback when TAVILY_API_KEY is empty.
 import type { ToolDefinition } from "./types.js";
 
 export const webSearchTool: ToolDefinition = {
   name: "web_search",
-  description: "Cari internet. Pakai Tavily bila ada API key, fallback DuckDuckGo.",
+  description: "Search the internet. Uses Tavily when an API key exists, DuckDuckGo fallback.",
   inputSchema: {
     type: "object",
     properties: {
-      query: { type: "string", description: "Kueri pencarian" },
-      maxResults: { type: "number", description: "Maks hasil (default 5)" },
+      query: { type: "string", description: "Search query" },
+      maxResults: { type: "number", description: "Max results (default 5)" },
     },
     required: ["query"],
   },
@@ -64,7 +64,7 @@ export function webSearchHandler() {
     const html = await res.text();
     const results: Array<{ title: string; url: string; content: string }> = [];
     const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]{0,500}?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-    // pola sederhana; bila gagal, kembalikan html terpotong agar agent tetap dapat konteks
+    // simple pattern; on failure return truncated html so the agent still gets context
     let m: RegExpExecArray | null;
     const strip = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&[^;]+;/g, " ").trim();
     while ((m = re.exec(html)) && results.length < maxResults) {
@@ -74,7 +74,7 @@ export function webSearchHandler() {
       return {
         query,
         provider: "duckduckgo",
-        note: "Set TAVILY_API_KEY untuk hasil lebih baik.",
+        note: "Set TAVILY_API_KEY for better results.",
         results: [],
         rawHint: html.slice(0, 2000).replace(/<[^>]+>/g, " ").slice(0, 1000),
       };
@@ -85,7 +85,7 @@ export function webSearchHandler() {
 
 export const webFetchTool: ToolDefinition = {
   name: "web_fetch",
-  description: "Ambil konten URL sebagai teks (dipotong 15k char). Untuk baca docs / artikel.",
+  description: "Fetch URL content as text (truncated at 15k chars). For reading docs / articles.",
   inputSchema: {
     type: "object",
     properties: {
@@ -102,7 +102,7 @@ export const webFetchTool: ToolDefinition = {
 export function webFetchHandler() {
   return async (args: Record<string, unknown>) => {
     const url = args.url as string;
-    if (!/^https?:\/\//i.test(url)) return { error: `URL tidak valid: ${url}` };
+    if (!/^https?:\/\//i.test(url)) return { error: `Invalid URL: ${url}` };
     const maxChars = (args.maxChars as number) || 15_000;
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 sabana-code/0.1" },

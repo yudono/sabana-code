@@ -1,4 +1,4 @@
-// ─── Loop detector — port ringkas dari sabana-dev agents/core/loop-detector.ts ───
+// ─── Loop detector — slim port from sabana-dev agents/core/loop-detector.ts ───
 export class LoopDetector {
   private calls: Array<{ name: string; hash: string; t: number }> = [];
   private errors: string[] = [];
@@ -14,7 +14,7 @@ export class LoopDetector {
 
     const rapid = this.calls.filter((c) => c.name === name && c.hash === hash && Date.now() - c.t < 3000);
     if (rapid.length >= 3) {
-      return { detected: true, reason: `Tool "${name}" dipanggil ${rapid.length}x beruntun dengan argumen sama` };
+      return { detected: true, reason: `Tool "${name}" called ${rapid.length}x in a row with identical args` };
     }
     if (this.calls.length >= this.windowSize) {
       const last = this.calls.slice(-this.windowSize);
@@ -22,7 +22,7 @@ export class LoopDetector {
       if (!last.some((c) => progress.has(c.name))) {
         return {
           detected: true,
-          reason: `Tidak ada write/shell dalam ${this.windowSize} panggilan terakhir. Wajib panggil write_file / modified_file SEKARANG.`,
+          reason: `No write/shell in the last ${this.windowSize} calls. You MUST call write_file / modified_file NOW.`,
         };
       }
     }

@@ -21,7 +21,7 @@ function sess(ws: string): Session {
 }
 
 describe("checkpoint & rewind", () => {
-  it("buat + daftar checkpoint", () => {
+  it("create + list checkpoints", () => {
     isolatedHome();
     const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
     writeFileSync(join(w, "a.txt"), "v1");
@@ -35,7 +35,7 @@ describe("checkpoint & rewind", () => {
     assert.equal(list[0].files, 1);
   });
 
-  it("rewind kembalikan isi file + riwayat", () => {
+  it("rewind restores file contents + history", () => {
     isolatedHome();
     const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
     writeFileSync(join(w, "a.txt"), "v1");
@@ -58,7 +58,7 @@ describe("checkpoint & rewind", () => {
     assert.deepEqual(back.filesModified, ["a.txt"]);
   });
 
-  it("rewind hapus file yang belum ada saat checkpoint", () => {
+  it("rewind deletes files missing at checkpoint time", () => {
     isolatedHome();
     const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
     const s = sess(w);
@@ -72,16 +72,16 @@ describe("checkpoint & rewind", () => {
     assert.equal(existsSync(join(w, "nanti.txt")), false);
   });
 
-  it("rewind id tak dikenal gagal jelas", () => {
+  it("unknown rewind id fails clearly", () => {
     isolatedHome();
     const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
     const s = sess(w);
     const { result } = rewindToCheckpoint(s, w, "ngawur");
     assert.equal(result.ok, false);
-    assert.ok(result.error?.includes("tidak ditemukan"));
+    assert.ok(result.error?.includes("not found"));
   });
 
-  it("file biner di-skip (tidak dihapus saat rewind)", () => {
+  it("binary files skipped (never deleted on rewind)", () => {
     isolatedHome();
     const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
     writeFileSync(join(w, "bin.dat"), Buffer.from([0x00, 0x01, 0x02, 0x41]));

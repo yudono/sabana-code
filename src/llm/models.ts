@@ -1,7 +1,7 @@
 // ─── Katalog model + context window ───
-// Satu session bisa terus jalan sampai batas context window model yang dipakai.
-// Tiap model punya batas berbeda → TUI menampilkan pemakaian + auto-trim.
-// Sekarang membaca config dari settings.providers[provider] (bukan env.SABANA_*).
+// One session can keep going until the active model's context window limit.
+// Each model has different limits → the TUI shows usage + auto-trim.
+// Now reads config from settings.providers[provider] (not env.SABANA_*).
 import { loadSettings } from "../settings.js";
 
 export interface ModelInfo {
@@ -14,36 +14,36 @@ export interface ModelInfo {
 
 const CATALOG: ModelInfo[] = [
   // OpenAI-compatible
-  { id: "gpt-4o-mini", provider: "openai", contextWindow: 128_000, maxOutput: 16_384, description: "Murah & cepat, default" },
-  { id: "gpt-4o", provider: "openai", contextWindow: 128_000, maxOutput: 16_384, description: "Serbaguna" },
-  { id: "gpt-4.1", provider: "openai", contextWindow: 1_000_000, maxOutput: 32_768, description: "Konteks 1M token" },
-  { id: "gpt-4.1-mini", provider: "openai", contextWindow: 1_000_000, maxOutput: 32_768, description: "Konteks 1M, hemat" },
+  { id: "gpt-4o-mini", provider: "openai", contextWindow: 128_000, maxOutput: 16_384, description: "Cheap & fast, default" },
+  { id: "gpt-4o", provider: "openai", contextWindow: 128_000, maxOutput: 16_384, description: "Versatile" },
+  { id: "gpt-4.1", provider: "openai", contextWindow: 1_000_000, maxOutput: 32_768, description: "1M-token context" },
+  { id: "gpt-4.1-mini", provider: "openai", contextWindow: 1_000_000, maxOutput: 32_768, description: "1M context, cheap" },
   { id: "o4-mini", provider: "openai", contextWindow: 200_000, maxOutput: 100_000, description: "Reasoning" },
   // Anthropic
-  { id: "claude-sonnet-4-5", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Coding kuat" },
-  { id: "claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Cepat & hemat" },
-  { id: "claude-opus-4-1", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Paling pintar" },
+  { id: "claude-sonnet-4-5", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Strong coding" },
+  { id: "claude-haiku-4-5", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Fast & cheap" },
+  { id: "claude-opus-4-1", provider: "anthropic", contextWindow: 200_000, maxOutput: 8_192, description: "Smartest" },
   // Google Gemini (endpoint OpenAI-compatible)
-  { id: "gemini-2.5-flash", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Cepat, konteks 1M" },
-  { id: "gemini-2.5-pro", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Paling pintar" },
+  { id: "gemini-2.5-flash", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Fast, 1M context" },
+  { id: "gemini-2.5-pro", provider: "google", contextWindow: 1_000_000, maxOutput: 32_768, description: "Smartest" },
   // Groq
-  { id: "llama-3.3-70b-versatile", provider: "groq", contextWindow: 128_000, maxOutput: 8_192, description: "Cepat & kuat" },
+  { id: "llama-3.3-70b-versatile", provider: "groq", contextWindow: 128_000, maxOutput: 8_192, description: "Fast & strong" },
   { id: "qwen-qwq-32b", provider: "groq", contextWindow: 128_000, maxOutput: 8_192, description: "Reasoning" },
   // Together AI
-  { id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", provider: "together", contextWindow: 128_000, maxOutput: 8_192, description: "Llama cepat" },
+  { id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", provider: "together", contextWindow: 128_000, maxOutput: 8_192, description: "Fast Llama" },
   { id: "Qwen/Qwen2.5-Coder-32B-Instruct", provider: "together", contextWindow: 32_768, maxOutput: 8_192, description: "Coding" },
   // OpenRouter
-  { id: "qwen/qwen-2.5-coder-32b-instruct", provider: "openrouter", contextWindow: 32_768, maxOutput: 8_192, description: "Coding hemat" },
-  { id: "anthropic/claude-sonnet-4", provider: "openrouter", contextWindow: 200_000, maxOutput: 8_192, description: "Coding kuat" },
+  { id: "qwen/qwen-2.5-coder-32b-instruct", provider: "openrouter", contextWindow: 32_768, maxOutput: 8_192, description: "Cheap coding" },
+  { id: "anthropic/claude-sonnet-4", provider: "openrouter", contextWindow: 200_000, maxOutput: 8_192, description: "Strong coding" },
   // Perplexity
-  { id: "sonar-pro", provider: "perplexity", contextWindow: 200_000, maxOutput: 8_000, description: "Riset + web" },
-  { id: "sonar", provider: "perplexity", contextWindow: 127_000, maxOutput: 8_000, description: "Ringan + web" },
-  // Ollama / lokal
-  { id: "qwen2.5-coder", provider: "ollama", contextWindow: 32_768, maxOutput: 4_096, description: "Coding lokal" },
-  { id: "llama3.1", provider: "ollama", contextWindow: 128_000, maxOutput: 4_096, description: "Serbaguna lokal" },
-  { id: "deepseek-r1", provider: "ollama", contextWindow: 128_000, maxOutput: 8_192, description: "Reasoning lokal" },
-  // Mock (benchmark / tanpa key)
-  { id: "mock", provider: "mock", contextWindow: 128_000, maxOutput: 4_096, description: "Deterministik, tanpa LLM" },
+  { id: "sonar-pro", provider: "perplexity", contextWindow: 200_000, maxOutput: 8_000, description: "Research + web" },
+  { id: "sonar", provider: "perplexity", contextWindow: 127_000, maxOutput: 8_000, description: "Light + web" },
+  // Ollama / local
+  { id: "qwen2.5-coder", provider: "ollama", contextWindow: 32_768, maxOutput: 4_096, description: "Local coding" },
+  { id: "llama3.1", provider: "ollama", contextWindow: 128_000, maxOutput: 4_096, description: "Versatile, local" },
+  { id: "deepseek-r1", provider: "ollama", contextWindow: 128_000, maxOutput: 8_192, description: "Local reasoning" },
+  // Mock (benchmark / no key)
+  { id: "mock", provider: "mock", contextWindow: 128_000, maxOutput: 4_096, description: "Deterministic, no LLM" },
 ];
 
 const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
@@ -71,7 +71,7 @@ export function findModel(id: string, provider?: string): ModelInfo | undefined 
   });
 }
 
-/** Context window untuk pasangan model+provider (fallback default provider bila tak dikenal). */
+/** Context window for a model+provider pair (provider-default fallback when unknown). */
 export function getContextWindow(model: string, provider: string): number {
   return (
     findModel(model, provider)?.contextWindow ??
@@ -98,7 +98,7 @@ export interface ProviderCreds {
 /**
  * Resolve kredensial + baseUrl per provider.
  * Prioritas: 1) env asli, 2) settings.providers[name], 3) preset defaults.
- * Opsi settings:false → hanya env asli (untuk deteksi sumber "env" vs "global").
+ * settings:false option → raw env only (to detect "env" vs "global" sources).
  */
 export function resolveProvider(provider: string, opts?: { settings?: boolean }): ProviderCreds {
   const useSettings = opts?.settings !== false;
@@ -142,7 +142,7 @@ export function resolveProvider(provider: string, opts?: { settings?: boolean })
   const openaiKey = pick("OPENAI_KEY", "SABANA_API_KEY");
   if (openaiKey) return { baseUrl: pick("OPENAI_BASEURL", "SABANA_BASE_URL") || "https://api.openai.com/v1", apiKey: openaiKey, needsKey: true };
 
-  // 2. settings.providers[name] (bila settings:true)
+  // 2. settings.providers[name] (when settings:true)
   if (useSettings) {
     const s = loadSettings();
     const cfg = s.providers[provider];
@@ -182,21 +182,21 @@ const PROVIDER_DEFAULTS_OBJ: Record<string, { baseUrl: string }> = {
   mock: { baseUrl: "" },
 };
 
-/** "Connect provider": uji cepat koneksi sebelum dipakai session. */
+/** "Connect provider": quick connection test before session use. */
 export async function testProviderConnection(provider: string): Promise<{ ok: boolean; detail: string }> {
   const { baseUrl, apiKey, needsKey } = resolveProvider(provider);
   if (needsKey && !apiKey) {
-    return { ok: false, detail: "API key belum di-set" };
+    return { ok: false, detail: "API key not set" };
   }
   try {
     if (provider === "ollama") {
       const res = await fetch(`${baseUrl.replace(/\/v1$/, "")}/api/tags`, {
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) return { ok: false, detail: `ollama: HTTP ${res.status} — pastikan 'ollama serve' jalan` };
+      if (!res.ok) return { ok: false, detail: `ollama: HTTP ${res.status} — make sure 'ollama serve' jalan` };
       const data = (await res.json()) as { models?: Array<{ name: string }> };
-      const names = (data.models || []).map((m) => m.name).join(", ") || "(belum ada model, pakai 'ollama pull ...')";
-      return { ok: true, detail: `ollama terhubung. Model lokal: ${names.slice(0, 200)}` };
+      const names = (data.models || []).map((m) => m.name).join(", ") || "(no models yet, use 'ollama pull ...')";
+      return { ok: true, detail: `ollama connected. Local models: ${names.slice(0, 200)}` };
     }
     if (provider === "anthropic") {
       return { ok: true, detail: "API key ditemukan. Koneksi real diuji saat turn pertama." };
@@ -209,13 +209,13 @@ export async function testProviderConnection(provider: string): Promise<{ ok: bo
       const t = await res.text().catch(() => "");
       return { ok: false, detail: `HTTP ${res.status}: ${t.slice(0, 160)}` };
     }
-    return { ok: true, detail: "Provider OpenAI-compatible terhubung." };
+    return { ok: true, detail: "OpenAI-compatible provider connected." };
   } catch (e) {
-    return { ok: false, detail: `Tidak terjangkau: ${(e as Error).message}` };
+    return { ok: false, detail: `Unreachable: ${(e as Error).message}` };
   }
 }
 
-/** Saring ID non-chat (audio/gambar/embedding/moderasi) dari daftar /v1/models. */
+/** Filter non-chat IDs (audio/image/embedding/moderation) from /v1/models lists. */
 export function isChatModelId(id: string): boolean {
   return !/whisper|tts|dall-e|moderation|embedding|audio|image|realtime|transcri|omni-moderation/i.test(id);
 }
@@ -228,7 +228,7 @@ export interface ProviderModelList {
 }
 
 /**
- * Ambil daftar model dari endpoint provider.
+ * Fetch the model list from the provider endpoint.
  * OpenAI-compatible: GET {baseUrl}/models. Ollama: GET /api/tags. Anthropic: tak ada list publik.
  */
 export async function fetchProviderModels(
@@ -238,10 +238,10 @@ export async function fetchProviderModels(
   const { baseUrl, apiKey, needsKey } = resolveProvider(provider);
   if (provider === "anthropic") {
     const fallback = listModels("anthropic").map((m) => m.id);
-    return { ok: true, models: fallback, source: "catalog", error: "Anthropic tak punya daftar publik — katalog bawaan." };
+    return { ok: true, models: fallback, source: "catalog", error: "Anthropic has no public list — built-in catalog." };
   }
   if (needsKey && !apiKey) {
-    return { ok: false, models: [], source: "none", error: "API key belum di-set." };
+    return { ok: false, models: [], source: "none", error: "API key not set." };
   }
   const timeoutMs = opts?.timeoutMs ?? 10_000;
   try {
@@ -268,6 +268,6 @@ export async function fetchProviderModels(
     const models = (data.data || []).map((m) => m.id).filter(Boolean).sort();
     return { ok: true, models, source: "live" };
   } catch (e) {
-    return { ok: false, models: [], source: "none", error: `Tidak terjangkau: ${(e as Error).message}` };
+    return { ok: false, models: [], source: "none", error: `Unreachable: ${(e as Error).message}` };
   }
 }

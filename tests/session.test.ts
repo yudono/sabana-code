@@ -18,7 +18,7 @@ function isolatedHome(): void {
 }
 
 describe("session store", () => {
-  it("simpan → list → load (dukung prefix id)", () => {
+  it("save → list → load (id prefix supported)", () => {
     isolatedHome();
     const s = createSession("gpt-4o-mini", "openai", "/tmp/ws");
     s.messages.push({ role: "user", content: "halo" });
@@ -31,7 +31,7 @@ describe("session store", () => {
     assert.equal(loadSession("tidak-ada"), null);
   });
 
-  it("judul otomatis dari pesan pertama + lastSession", () => {
+  it("auto title from first message + lastSession", () => {
     isolatedHome();
     const s = createSession("m", "mock", "/tmp");
     s.messages.push({ role: "user", content: "buatkan x" });
@@ -39,7 +39,7 @@ describe("session store", () => {
     assert.equal(lastSession()?.title, "buatkan x");
   });
 
-  it("approvals: session baru kosong, tersimpan, dan ikut ke-load", () => {
+  it("approvals: new sessions empty, saved, and reloaded", () => {
     isolatedHome();
     const s = createSession("m", "mock", "/tmp");
     assert.deepEqual(s.approvals, { allowAll: [], denied: [] });
@@ -49,7 +49,7 @@ describe("session store", () => {
     assert.deepEqual(back.approvals, { allowAll: ["shell:npm"], denied: ["shell:rm"] });
   });
 
-  it("approvals: session lama tanpa field di-backfill kosong", async () => {
+  it("approvals: old sessions without the field backfill empty", async () => {
     isolatedHome();
     const s = createSession("m", "mock", "/tmp");
     saveSession(s);
@@ -66,13 +66,13 @@ describe("session store", () => {
 describe("context guard", () => {
   const msg = (content: string): ModelMessage => ({ role: "user", content });
 
-  it("menghitung pemakaian sesuai window model", () => {
+  it("counts usage against the model window", () => {
     const u = contextUsage([msg("a".repeat(400))], "gpt-4o-mini", "openai");
     assert.equal(u.tokens, 100);
     assert.equal(u.window, 128_000);
   });
 
-  it("trim mempertahankan system + user pertama dan mengecilkan konteks", () => {
+  it("trim keeps system + first user and shrinks context", () => {
     const big = "x".repeat(40_000); // ~10k token per pesan
     const messages: ModelMessage[] = [
       { role: "system", content: "sys" },
@@ -92,7 +92,7 @@ describe("context guard", () => {
     assert.ok(r.usage.tokens < before);
   });
 
-  it("trim membuang tool-result yatim", () => {
+  it("trim drops orphan tool results", () => {
     const big = "y".repeat(20_000);
     const messages: ModelMessage[] = [
       { role: "system", content: "sys" },
@@ -116,7 +116,7 @@ describe("context guard", () => {
     }
   });
 
-  it("tanpa trim bila masih muat", () => {
+  it("no trim when it still fits", () => {
     const r = ensureFits([msg("hi")], "gpt-4o-mini", "openai");
     assert.equal(r.trimmed, 0);
   });

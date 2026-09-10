@@ -1,4 +1,4 @@
-// ─── Slash-command TUI: parse + daftar bantuan ───
+// ─── Slash-command TUI: parse + help list + autocomplete ───
 
 export interface ParsedCommand {
   name: string;
@@ -14,38 +14,56 @@ export function parseCommand(input: string): ParsedCommand | null {
 }
 
 export const COMMAND_LIST: Array<{ name: string; usage: string; desc: string }> = [
-  { name: "/help", usage: "/help", desc: "Tampilkan bantuan ini" },
-  { name: "/new", usage: "/new", desc: "Mulai session baru" },
-  { name: "/sessions", usage: "/sessions", desc: "Daftar semua session tersimpan" },
-  { name: "/projects", usage: "/projects", desc: "Daftar project + jumlah session" },
-  { name: "/agents", usage: "/agents", desc: "Daftar profil sub-agent kustom" },
-  { name: "/agent", usage: "/agent <nama> <tugas>", desc: "Delegasikan tugas ke sub-agent" },
-  { name: "/skills", usage: "/skills", desc: "Daftar skill kerja yang tersedia" },
-  { name: "/skill", usage: "/skill <nama>", desc: "Lihat instruksi penuh satu skill" },
-  { name: "/todo", usage: "/todo", desc: "Lihat antrean todo project" },
-  { name: "/mcp", usage: "/mcp [reload]", desc: "Status server MCP + tools" },
-  { name: "/checkpoint", usage: "/checkpoint [label]", desc: "Simpan titik aman (file + riwayat)" },
-  { name: "/checkpoints", usage: "/checkpoints", desc: "Daftar titik aman session ini" },
-  { name: "/rewind", usage: "/rewind <id>", desc: "Mundur ke checkpoint (restore file + riwayat)" },
-  { name: "/resume", usage: "/resume <id|nomor>", desc: "Lanjutkan session (dukung prefix id)" },
-  { name: "/models", usage: "/models [filter|nomor|nama]", desc: "Daftar model live provider + pilih" },
-  { name: "/providers", usage: "/providers [use|login ...]", desc: "Kelola multi-provider yang terkonek" },
-  { name: "/compact", usage: "/compact", desc: "Padatkan konteks sekarang (auto saat >80%)" },
-  { name: "/login", usage: "/login <provider> <key>", desc: "Simpan API key ke ~/sabana-code/ (global)" },
-  { name: "/logout", usage: "/logout [provider]", desc: "Lihat / hapus kredensial tersimpan" },
-  { name: "/context", usage: "/context", desc: "Lihat pemakaian context window" },
-  { name: "/tools", usage: "/tools", desc: "Daftar tools agent" },
-  { name: "/clear", usage: "/clear", desc: "Bersihkan layar (riwayat konteks tetap)" },
-  { name: "/quit", usage: "/quit", desc: "Simpan session & keluar (alias /exit)" },
+  { name: "/help", usage: "/help", desc: "Show this help" },
+  { name: "/new", usage: "/new", desc: "Start a new session" },
+  { name: "/sessions", usage: "/sessions", desc: "List all saved sessions" },
+  { name: "/projects", usage: "/projects", desc: "List projects + session counts" },
+  { name: "/agents", usage: "/agents", desc: "List custom sub-agent profiles" },
+  { name: "/agent", usage: "/agent <name> <task>", desc: "Delegate a task to a sub-agent" },
+  { name: "/skills", usage: "/skills", desc: "List available work skills" },
+  { name: "/skill", usage: "/skill <name>", desc: "View one skill's full instructions" },
+  { name: "/todo", usage: "/todo", desc: "View the project todo queue" },
+  { name: "/mcp", usage: "/mcp [reload]", desc: "MCP server status + tools" },
+  { name: "/checkpoint", usage: "/checkpoint [label]", desc: "Save a safe point (files + history)" },
+  { name: "/checkpoints", usage: "/checkpoints", desc: "List this session's safe points" },
+  { name: "/rewind", usage: "/rewind <id>", desc: "Rewind to a checkpoint (restore files + history)" },
+  { name: "/resume", usage: "/resume <id|number>", desc: "Resume a session (id prefix ok)" },
+  { name: "/models", usage: "/models [filter|number|name]", desc: "Live provider model list + select" },
+  { name: "/providers", usage: "/providers [use|login ...]", desc: "Manage connected multi-providers" },
+  { name: "/compact", usage: "/compact", desc: "Compact context now (auto past 80%)" },
+  { name: "/login", usage: "/login <provider> <key>", desc: "Save API key to ~/sabana-code/ (global)" },
+  { name: "/logout", usage: "/logout [provider]", desc: "View / remove stored credentials" },
+  { name: "/context", usage: "/context", desc: "Show active model context usage" },
+  { name: "/tools", usage: "/tools", desc: "List agent tools" },
+  { name: "/clear", usage: "/clear", desc: "Clear screen (context history kept)" },
+  { name: "/quit", usage: "/quit", desc: "Save session & exit (alias /exit)" },
 ];
 
 export function helpText(): string {
-  return ["Perintah tersedia:", ...COMMAND_LIST.map((c) => `  ${c.usage.padEnd(22)} ${c.desc}`)].join("\n");
+  return ["Available commands:", ...COMMAND_LIST.map((c) => `  ${c.usage.padEnd(22)} ${c.desc}`)].join("\n");
+}
+
+/**
+ * Autocomplete: filter command names by what the user typed after "/".
+ * Returns matching command names ("/" alone → all). Empty when the input
+ * is not a slash prefix or already names an exact command with arguments.
+ */
+export function suggestCommands(input: string): string[] {
+  if (!input.startsWith("/")) return [];
+  const rest = input.slice(1);
+  if (/\s/.test(rest)) {
+    // Exact command + args typed → nothing to suggest.
+    const first = rest.split(/\s+/)[0]?.toLowerCase();
+    if (COMMAND_LIST.some((c) => c.name === `/${first}`)) return [];
+    return [];
+  }
+  const prefix = rest.toLowerCase();
+  return COMMAND_LIST.filter((c) => c.name.slice(1).startsWith(prefix)).map((c) => c.name);
 }
 
 /**
  * Cocokkan nama model persis (case-insensitive) ke daftar live terakhir
- * atau katalog — untuk input manual via `/models <nama>`.
+ * or catalog — for manual input via `/models <name>`.
  */
 export function matchModelName(arg: string, liveModels: string[], catalogIds: string[]): string | null {
   const lower = arg.trim().toLowerCase();

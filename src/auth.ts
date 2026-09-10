@@ -1,6 +1,6 @@
-// ─── Kredensial: resolve per provider dari settings.json + env ───
-// Settings.json sekarang punya { default_provider, default_model, providers: { [name]: { apiKey, baseUrl, ... } } }
-// Tiap provider punya config sendiri, tidak saling tumpuk.
+// ─── Credentials: per-provider resolution from settings.json + env ───
+// settings.json now holds { default_provider, default_model, providers: { [name]: { apiKey, baseUrl, ... } } }
+// Each provider has its own config, never overlapping.
 import { loadSettings, saveSettings } from "./settings.js";
 import { resolveProvider } from "./llm/models.js";
 
@@ -11,7 +11,7 @@ export interface ResolvedCreds {
 }
 
 export function resolveCredentials(provider: string): ResolvedCreds {
-  // 1. Env asli (tanpa settings) → sumber "env"
+  // 1. Raw env (no settings) → "env" source
   const raw = resolveProvider(provider, { settings: false });
   if (!raw.needsKey) return { apiKey: raw.apiKey, baseUrl: raw.baseUrl, source: "env" };
   if (raw.apiKey) return { apiKey: raw.apiKey, baseUrl: raw.baseUrl, source: "env" };
@@ -24,7 +24,7 @@ export function resolveCredentials(provider: string): ResolvedCreds {
   return { apiKey: "", baseUrl: raw.baseUrl, source: "none" };
 }
 
-/** Simpan key provider ke settings.json (global). */
+/** Save a provider key into settings.json (global). */
 export function saveCredential(provider: string, apiKey: string, baseUrl = ""): void {
   const s = loadSettings();
   const existing = s.providers[provider];

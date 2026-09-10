@@ -1,4 +1,4 @@
-// ─── Filesystem tools — port dari sabana-dev tools/built-in/{read,write,tools}.ts ───
+// ─── Filesystem tools — ported from sabana-dev tools/built-in/{read,write,tools}.ts ───
 import {
   closeSync,
   existsSync,
@@ -15,18 +15,19 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { ToolDefinition } from "./types.js";
 import { safePath } from "./sandbox.js";
+import { isSensitivePath } from "../utils/guardrails.js";
 
 // ─── read_file ───
 export const readFileTool: ToolDefinition = {
   name: "read_file",
-  description: "Baca isi file. Mengembalikan konten bernomor baris. Dukung rentang baris untuk file besar.",
+  description: "Read file contents. Returns line-numbered content. Supports line ranges for large files.",
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Path relatif dari workspace root" },
-      startLine: { type: "number", description: "Baris awal (1-indexed)" },
-      endLine: { type: "number", description: "Baris akhir (inklusif)" },
-      maxLines: { type: "number", description: "Maks baris (default 500)" },
+      path: { type: "string", description: "Path relative to workspace root" },
+      startLine: { type: "number", description: "Start line (1-indexed)" },
+      endLine: { type: "number", description: "End line (inclusive)" },
+      maxLines: { type: "number", description: "Max lines (default 500)" },
     },
     required: ["path"],
   },
@@ -38,6 +39,8 @@ export const readFileTool: ToolDefinition = {
 export function readFileHandler(workspaceDir: string) {
   return async (args: Record<string, unknown>) => {
     const path = args.path as string;
+    const sensitive = isSensitivePath(path);
+    if (sensitive) return { error: `Refusing to read sensitive file (${sensitive}): ${path}`, denied: true };
     const full = safePath(workspaceDir, path);
     if (!full) return { error: `Path escapes workspace: ${path}`, denied: true };
     if (!existsSync(full)) return { error: `File not found: ${path}`, exists: false };
@@ -68,12 +71,12 @@ export function readFileHandler(workspaceDir: string) {
 // ─── write_file ───
 export const writeFileTool: ToolDefinition = {
   name: "write_file",
-  description: "Tulis file baru / timpa seluruh file. Buat folder induk otomatis. Untuk edit kecil pakai modified_file.",
+  description: "Write a new file / overwrite an entire file. Creates parent folders automatically. For small edits use modified_file.",
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Path relatif dari workspace root" },
-      content: { type: "string", description: "Isi file lengkap" },
+      path: { type: "string", description: "Path relative to workspace root" },
+      content: { type: "string", description: "Complete file contents" },
     },
     required: ["path", "content"],
   },
@@ -98,13 +101,13 @@ export function writeFileHandler(workspaceDir: string) {
 export const modifiedFileTool: ToolDefinition = {
   name: "modified_file",
   description:
-    "Edit terarah dengan search-and-replace eksak. Mengembalikan unified diff (+/-). Gagal bila search tidak unik/tidak ketemu.",
+    "Targeted edits with exact search-and-replace. Returns a unified diff (+/-). Fails when search is missing or ambiguous.",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string" },
-      search: { type: "string", description: "String eksak yang dicari" },
-      replace: { type: "string", description: "Pengganti" },
+      search: { type: "string", description: "Exact string to find" },
+      replace: { type: "string", description: "Replacement" },
     },
     required: ["path", "search", "replace"],
   },
@@ -120,7 +123,7 @@ export interface FileDiff {
 }
 
 /**
- * Unified diff sederhana untuk SATU hunk hasil search→replace.
+ * Simple unified diff for ONE search→replace hunk.
  * Prefix/suffix yang sama dipangkas; konteks 3 baris di tiap sisi hunk.
  */
 export function buildDiff(path: string, oldContent: string, newContent: string, context = 3): FileDiff {
@@ -145,7 +148,7 @@ export function buildDiff(path: string, oldContent: string, newContent: string, 
     `+++ ${path}`,
     `@@ -${aStart + 1},${aEnd - aStart} +${bStart + 1},${bEnd - bStart} @@`,
   ];
-  // Konteks atas: baris yang sama di kedua sisi.
+  // Upper context: identical lines on both sides.
   for (let i = aStart; i < pre; i++) out.push(` ${a[i]}`);
   const removed = a.slice(pre, a.length - suf);
   const added = b.slice(pre, b.length - suf);
@@ -166,7 +169,7 @@ export function modifiedFileHandler(workspaceDir: string) {
     const replace = args.replace as string;
     const count = content.split(search).length - 1;
     if (count === 0) return { error: `Search string not found in ${path}` };
-    if (count > 1) return { error: `Search string cocok ${count}x — berikan konteks lebih panjang` };
+    if (count > 1) return { error: `Search string matches ${count}x — provide a longer context` };
     const next = content.replace(search, replace);
     writeFileSync(full, next, "utf-8");
     const { added, removed, diff } = buildDiff(path, content, next);
@@ -177,11 +180,11 @@ export function modifiedFileHandler(workspaceDir: string) {
 // ─── delete_file ───
 export const deleteFileTool: ToolDefinition = {
   name: "delete_file",
-  description: "Hapus file atau direktori KOSONG di dalam workspace. Menolak direktori berisi.",
+  description: "Delete a file or EMPTY directory inside the workspace. Refuses non-empty directories.",
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Path relatif dari workspace root" },
+      path: { type: "string", description: "Path relative to workspace root" },
     },
     required: ["path"],
   },
@@ -213,11 +216,11 @@ export function deleteFileHandler(workspaceDir: string) {
 // ─── list_directory ───
 export const listDirectoryTool: ToolDefinition = {
   name: "list_directory",
-  description: "List file & subdirektori hingga kedalaman tertentu.",
+  description: "List files & subdirectories up to a given depth.",
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Direktori relatif (default: root)" },
+      path: { type: "string", description: "Relative directory (default: root)" },
       maxDepth: { type: "number" },
     },
   },
@@ -262,7 +265,7 @@ export function listDirectoryHandler(workspaceDir: string) {
 // ─── glob ───
 export const globTool: ToolDefinition = {
   name: "glob",
-  description: "Cari file dengan pola glob sederhana (mis. **/*.ts).",
+  description: "Find files with a simple glob pattern (e.g. **/*.ts).",
   inputSchema: {
     type: "object",
     properties: {
@@ -315,13 +318,13 @@ export function globHandler(workspaceDir: string) {
 // ─── grep ───
 export const grepTool: ToolDefinition = {
   name: "grep",
-  description: "Cari isi file dengan regex. Mengembalikan file + nomor baris.",
+  description: "Search file contents with regex. Returns files + line numbers.",
   inputSchema: {
     type: "object",
     properties: {
-      query: { type: "string", description: "Pola regex" },
+      query: { type: "string", description: "Regex pattern" },
       path: { type: "string" },
-      include: { type: "string", description: "Filter mis. *.ts" },
+      include: { type: "string", description: "Filter e.g. *.ts" },
       maxResults: { type: "number" },
     },
     required: ["query"],
@@ -334,7 +337,10 @@ export const grepTool: ToolDefinition = {
 export function grepHandler(workspaceDir: string) {
   return async (args: Record<string, unknown>) => {
     const query = args.query as string;
-    const dir = safePath(workspaceDir, (args.path as string) || ".");
+    const rawDir = (args.path as string) || ".";
+    const sensitive = isSensitivePath(rawDir);
+    if (sensitive) return { error: `Refusing to search sensitive path (${sensitive}): ${rawDir}`, denied: true };
+    const dir = safePath(workspaceDir, rawDir);
     if (!dir) return { error: "Path escapes workspace", denied: true };
     const max = (args.maxResults as number) || 50;
     const include = args.include as string | undefined;
@@ -343,7 +349,7 @@ export function grepHandler(workspaceDir: string) {
     try {
       re = new RegExp(query);
     } catch {
-      return { error: `Regex tidak valid: ${query}` };
+      return { error: `Invalid regex: ${query}` };
     }
     const results: Array<{ file: string; line: number; match: string }> = [];
     const walk = (d: string): void => {
@@ -356,6 +362,8 @@ export function grepHandler(workspaceDir: string) {
           if (e.isDirectory()) walk(full);
           else if (e.isFile()) {
             if (incRe && !incRe.test(e.name)) continue;
+            // Never slurp private key material into context via broad greps.
+            if (isSensitivePath(e.name)) continue;
             try {
               const lines = readFileSync(full, "utf-8").split("\n");
               lines.forEach((l, i) => {

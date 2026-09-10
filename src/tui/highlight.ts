@@ -1,6 +1,6 @@
-// ─── Syntax highlighter mungil untuk preview TUI (tanpa dependensi) ───
-// Tokenizer per baris: komentar > string > angka > keyword. Cukup untuk
-// pratinjau baca, bukan pengganti tree-sitter.
+// ─── Tiny syntax highlighter for TUI previews (zero dependencies) ───
+// Per-line tokenizer: comment > string > number > keyword. Good enough for
+// reading previews, not a tree-sitter replacement.
 
 export type HlColor =
   | "cyan"
@@ -53,11 +53,11 @@ const RUST_KEYWORDS = new Set(
 
 const MD_FENCE = /^(\s*)(```|~~~)/;
 
-/** Tebak bahasa dari path file. Diff hanya via pemanggil eksplisit. */
+/** Guess the language from the file path. Diff only via explicit caller. */
 export function detectLang(path: string): Exclude<HlLang, "diff"> {
   const p = path.toLowerCase();
   const base = p.split("/").pop() || p;
-  // Nama file khusus tanpa ekstensi.
+  // Special extensionless filenames.
   if (/^(dockerfile|containerfile)([.:]|$)/.test(base) || base === "makefile" || base === "gnumakefile") return "sh";
   if (/^.*\b(docker-compose|compose)\.ya?ml$/.test(base)) return "yaml";
   if (/\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/.test(p)) return "ts";
@@ -80,8 +80,8 @@ export function detectLang(path: string): Exclude<HlLang, "diff"> {
 }
 
 /**
- * Tebakan konten untuk file tanpa ekstensi dikenali (skrip tanpa ekstensi,
- * dotfiles, dsb). Path tetap menang bila sudah spesifik (bukan plain/code).
+ * Content guess for files with no recognized extension (extensionless scripts,
+ * dotfiles, etc). Path still wins when already specific (not plain/code).
  */
 export function detectLangFromContent(path: string, content: string): Exclude<HlLang, "diff"> {
   const byPath = detectLang(path);
@@ -89,7 +89,7 @@ export function detectLangFromContent(path: string, content: string): Exclude<Hl
   const head = content.split("\n").slice(0, 5).join("\n");
   const shebang = /^#!\s*(.+)$/.exec(head.split("\n")[0] || "");
   if (shebang) {
-    // Dukung bentuk `/usr/bin/env python3` (interpreter = token setelah env).
+    // Support the `/usr/bin/env python3` form (interpreter = token after env).
     const toks = shebang[1].trim().split(/\s+/).filter((t) => !t.startsWith("-"));
     let bin = (toks[0] || "").split("/").pop() || "";
     if ((bin === "env" || bin === "busybox") && toks[1]) bin = toks[1].split("/").pop() || "";
@@ -106,7 +106,7 @@ export function detectLangFromContent(path: string, content: string): Exclude<Hl
       JSON.parse(content.slice(0, 4000));
       return "json";
     } catch {
-      /* bukan JSON */
+      /* not JSON */
     }
   }
   if (/^---\s*\n(\s*\w[\w-]*\s*:)/.test(head)) return "yaml";
@@ -115,7 +115,7 @@ export function detectLangFromContent(path: string, content: string): Exclude<Hl
   return byPath;
 }
 
-/** Buang ANSI escape (warna shell) agar pratinjau terminal bersih. */
+/** Strip ANSI escapes (shell colors) for clean terminal previews. */
 export function stripAnsi(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, "");
@@ -128,7 +128,7 @@ interface Rule {
   dim?: boolean;
 }
 
-// Urutan = prioritas pada posisi yang sama.
+// Order = priority at the same position.
 const TS_RULES: Rule[] = [
   { re: /\/\/.*$/, color: "gray" },
   { re: /\/\*.*?\*\//, color: "gray" },
@@ -175,7 +175,7 @@ function highlightLine(line: string, rules: Rule[], keywords: Set<string> | null
     flush();
     const tok = rest.slice(best.index, best.index + best.len);
     rest = rest.slice(best.index + best.len);
-    // Kata kunci hanya bila token adalah identifier utuh.
+    // Keywords only when the token is a whole identifier.
     if (keywords && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(tok) && keywords.has(tok)) {
       segs.push({ text: tok, color: "magenta" });
       continue;
@@ -187,7 +187,7 @@ function highlightLine(line: string, rules: Rule[], keywords: Set<string> | null
     segs.push({ text: tok, color: best.rule.color, bold: best.rule.bold, dim: best.rule.dim });
   }
   flush();
-  // Pecah identifier biasa untuk deteksi keyword/tipe di sisa buffer.
+  // Split plain identifiers to detect keywords/types in the remaining buffer.
   if (!keywords) return segs;
   const out: HlSeg[] = [];
   for (const s of segs) {
@@ -209,7 +209,7 @@ function highlightLine(line: string, rules: Rule[], keywords: Set<string> | null
 function highlightMarkdown(line: string): HlSeg[] {
   const h = /^(#{1,6}\s+)(.*)$/.exec(line);
   if (h) return [{ text: h[1], color: "cyan", bold: true }, { text: h[2], bold: true }];
-  // Inline code + bold, sisanya polos.
+  // Inline code + bold, the rest plain.
   const segs: HlSeg[] = [];
   const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
   let last = 0;
@@ -239,7 +239,7 @@ function highlightDiffLine(line: string): HlSeg[] {
 const MAX_LINES = 2000;
 const MAX_LINE_CHARS = 2000;
 
-/** Highlight kode → baris-baris segmen. Aman untuk konten besar (dipotong). */
+/** Highlight code → segment rows. Safe for huge contents (truncated). */
 export function highlight(code: string, lang: HlLang): HlSeg[][] {
   const rawLines = code.split("\n");
   const truncated = rawLines.length > MAX_LINES;

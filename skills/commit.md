@@ -1,15 +1,15 @@
 ---
 name: commit
-description: Tulis commit message ala Conventional Commits dari git diff
+description: Write a Conventional Commits message from git diff
 ---
 
 # Skill: commit
 
-Dipakai saat user minta buatkan commit message atau commit otomatis.
+Used when the user asks for a commit message or an automatic commit.
 
-Aturan:
-1. Jalankan `git status --short` dan `git diff --stat` dulu untuk memahami perubahan.
-2. Tulis SATU commit message format: `<type>(<scope>): <ringkasan>`.
+Rules:
+1. Run `git status --short` and `git diff --stat` first to understand the changes.
+2. Write ONE commit message in the format: `<type>(<scope>): <summary>`.
 3. Type: feat, fix, docs, refactor, test, chore.
-4. Ringkasan ≤ 72 karakter, bahasa Inggris, tanpa tubuh panjang kecuali diminta.
-5. Jangan commit bila ada file secrets (.env, *.pem, credentials.json) di status.
+4. Summary ≤ 72 chars, English, no long body unless asked.
+5. Never commit when secret files (.env, *.pem, credentials.json) are in status.

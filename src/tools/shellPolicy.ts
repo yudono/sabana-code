@@ -1,13 +1,13 @@
-// ─── Kebijakan izin shell: perintah read-only bebas izin, sisanya ditanya ───
-// write/read/edit file & tool baca lain TIDAK perlu izin (risk "safe").
-// Yang perlu izin hanya eksekusi perintah yang berpotensi berbahaya
-// (rm, mkdir, npm, git, ...). Perintah aman seperti cd/ls langsung jalan.
+// ─── Shell approval policy: read-only commands need no approval, the rest ask ───
+// File write/read/edit & other read tools need NO approval (risk "safe").
+// Only potentially dangerous execution needs approval
+// (rm, mkdir, npm, git, ...). Safe commands like cd/ls run directly.
 //
-// Aturan untuk satu perintah shell:
-// - mengandung substitusi (`...` / $(...)) atau redireksi (>/<) → TIDAK aman.
-// - dipecah per segmen (&&, ||, ;, |, newline): SEMUA segmen harus aman.
-// - kata pertama tiap segmen (abaikan wrapper command/builtin & VAR=x)
-//   harus ada di daftar SAFE. sudo/doas → selalu minta izin.
+// Rules for one shell command:
+// - contains substitution (`...` / $(...)) or redirection (>/<) → NOT safe.
+// - split per segment (&&, ||, ;, |, newline): ALL segments must be safe.
+// - first word of each segment (ignoring command/builtin wrappers & VAR=x)
+//   must be on the SAFE list. sudo/doas → always ask.
 
 const SAFE_BASES = new Set([
   "cd", "ls", "pwd", "echo", "printf", "cat", "head", "tail", "wc",
@@ -21,7 +21,7 @@ const SAFE_BASES = new Set([
 function segmentSafe(seg: string): boolean {
   const words = seg.trim().split(/\s+/).filter(Boolean);
   let i = 0;
-  // Lewati wrapper command/builtin dan assignment VAR=nilai
+  // Skip command/builtin wrappers and VAR=value assignments
   for (;;) {
     const w = words[i];
     if (w === "command" || w === "builtin") {

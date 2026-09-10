@@ -1,5 +1,5 @@
-// ─── Boot TUI fullscreen: parsing arg + inisialisasi + alternate screen ───
-// Dipakai `sabana-code` (bin satu-satunya) dan `npm run tui` (dev).
+// ─── Fullscreen TUI boot: arg parsing + init + alternate screen ───
+// Used by `sabana-code` (the only binary) and `npm run tui` (dev).
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import React from "react";
@@ -25,7 +25,7 @@ export interface TuiArgs {
   help: boolean;
 }
 
-/** Pure arg parsing (di-unit-test). */
+/** Pure arg parsing (unit-tested). */
 export function parseTuiArgs(argv: string[]): TuiArgs {
   const args: TuiArgs = {
     workspace: process.cwd(),
@@ -56,34 +56,36 @@ export function parseTuiArgs(argv: string[]): TuiArgs {
 
 export function tuiHelp(): string {
   return `
-sabana-code — TUI coding agent (fullscreen)
+sabana-code — fullscreen TUI coding agent
 
 Usage:
-  sabana-code ["prompt awal"] [options]
-  sabana-code setup | sabana-code auth ...   (lihat sabana-code --help)
+  sabana-code ["initial prompt"] [options]
+  sabana-code setup | sabana-code auth ...   (see sabana-code --help)
 
 Options:
   -C, --workspace <path>  Workspace (default: cwd)
-  --model <name>           Model awal (default dari setup)
+  --model <name>           Initial model (default from setup)
   --provider <name>        openai | anthropic | google | groq | together | openrouter | perplexity | ollama | custom | mock
-  --max-steps <n>          Maks step per turn (default: 40)
-  --resume, -r <id>        Lanjutkan session (dukung prefix)
-  --continue               Lanjutkan session terakhir
-  -h, --help               Bantuan ini
+  --max-steps <n>          Max steps per turn (default: 40)
+  --resume, -r <id>        Resume a session (prefix ok)
+  --continue               Resume the last session
+  -h, --help               This help
+  -V, --version            Print version
 
-Di dalam TUI: /help /new /sessions /projects /resume /models
-  /providers /compact /login /logout /agents /agent /context /tools /clear /quit
+Inside the TUI: /help /new /sessions /projects /resume /models
+  /providers /compact /login /logout /agents /agent /skills /todo
+  /mcp /checkpoint /checkpoints /rewind /context /tools /clear /quit
 `;
 }
 
 const ENTER_ALT = "\x1b[?1049h";
 const EXIT_ALT = "\x1b[?1049l";
 
-/** Baris hint resume yang dicetak setelah TUI keluar (pure, di-unit-test). */
+/** Resume hint line printed after TUI exit (pure, unit-tested). */
 export function formatResumeHint(sessionId: string, workspaceDir: string): string {
   const short = sessionId.slice(0, 8);
   const ws = /\s/.test(workspaceDir) ? `"${workspaceDir}"` : workspaceDir;
-  return `Session tersimpan (${short}). Lanjutkan dengan:\n  sabana-code -r ${short} -C ${ws}`;
+  return `Session saved (${short}). Resume with:\n  sabana-code -r ${short} -C ${ws}`;
 }
 
 export async function launchTui(args: TuiArgs): Promise<void> {
@@ -93,7 +95,7 @@ export async function launchTui(args: TuiArgs): Promise<void> {
   }
   const workspace = args.workspace;
 
-  // Inisialisasi home + setup provider bila pertama kali
+  // Home init + provider setup on first run
   let settings;
   try {
     settings = await ensureInitialized();
@@ -110,7 +112,7 @@ export async function launchTui(args: TuiArgs): Promise<void> {
   const creds = resolveCredentials(provider);
   if (!creds.apiKey && provider !== "ollama" && provider !== "mock") {
     process.stderr.write(
-      `\x1b[31m✗ Tidak ada API key untuk ${provider}. Jalankan: sabana-code setup\x1b[0m\n`,
+      `\x1b[31m✗ No API key for ${provider}. Run: sabana-code setup\x1b[0m\n`,
     );
     process.exit(1);
   }
@@ -118,7 +120,7 @@ export async function launchTui(args: TuiArgs): Promise<void> {
 
   let session = args.resumeId ? loadSession(args.resumeId) : args.cont ? lastSession() : null;
   if ((args.resumeId || args.cont) && !session) {
-    process.stderr.write("\x1b[31m✗ Session tidak ditemukan.\x1b[0m\n");
+    process.stderr.write("\x1b[31m✗ Session not found.\x1b[0m\n");
     process.exit(1);
   }
   if (!session) {
@@ -134,12 +136,12 @@ export async function launchTui(args: TuiArgs): Promise<void> {
   const stdinTTY = process.stdin.isTTY === true;
   const stdoutTTY = process.stdout.isTTY === true;
   if (!stdinTTY || !stdoutTTY) {
-    process.stderr.write("\x1b[31m✗ sabana-code butuh terminal interaktif (TTY).\x1b[0m\n");
+    process.stderr.write("\x1b[31m✗ sabana-code needs an interactive terminal (TTY).\x1b[0m\n");
     process.exit(1);
   }
 
   const initialPrompt = args.promptParts.length > 0 ? args.promptParts.join(" ") : undefined;
-  // Hook demo/smoke offline: skrip tool mock via env (tanpa LLM key).
+  // Offline demo/smoke hook: mock tool script via env (no LLM key).
   if (provider === "mock" && process.env.SABANA_MOCK_PLAN) {
     try {
       const plan = JSON.parse(process.env.SABANA_MOCK_PLAN) as Array<{ name: string; args: Record<string, unknown> }>;
@@ -148,9 +150,9 @@ export async function launchTui(args: TuiArgs): Promise<void> {
       /* abaikan plan rusak */
     }
   }
-  // Fullscreen: pakai alternate screen agar TUI mengisi seluruh terminal
-  // dan layar terminal dikembalikan utuh saat keluar.
-  // Matikan logger langsung supaya tidak ada tulisan liar yang menumpuk render Ink.
+  // Fullscreen: alternate screen fills the whole terminal
+  // and the terminal screen is restored intact on exit.
+  // Silence the direct logger so no stray writes pile over the Ink render.
   setQuiet(true);
   process.stdout.write(ENTER_ALT + MOUSE_ON);
   try {
@@ -167,6 +169,6 @@ export async function launchTui(args: TuiArgs): Promise<void> {
     }
     process.stdout.write(EXIT_ALT);
   }
-  // Alt-screen sudah dikembalikan — aman cetak hint resume ke terminal normal.
+  // Alt-screen already restored — safe to print the resume hint on the normal terminal.
   process.stdout.write(`\n${formatResumeHint(session.id, workspace)}\n`);
 }

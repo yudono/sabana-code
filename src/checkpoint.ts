@@ -1,7 +1,7 @@
 // ─── Checkpoint & rewind ala coding agent modern ───
-// Menyimpan snapshot (isi file yang disentuh + riwayat pesan) per session di
+// Stores snapshots (touched file contents + message history) per session in
 // ~/sabana-code/checkpoints/<sessionId>/<cpId>.json. `/rewind <id>` mengembalikan
-// file DAN riwayat ke titik itu — aman untuk eksperimen ("coba dulu, gagal → mundur").
+// file DAN riwayat ke titik itu — safe for experiments ("try first, rewind on failure → mundur").
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ModelMessage } from "./llm/types.js";
@@ -11,9 +11,9 @@ import { safePath } from "./tools/sandbox.js";
 
 export interface FileSnapshot {
   path: string;
-  /** null = file belum ada saat checkpoint (akan dihapus saat rewind). */
+  /** null = file did not exist at checkpoint time (deleted on rewind). */
   content: string | null;
-  /** true = file ada tapi tak terbaca (biner/terlalu besar) → rewind TIDAK menyentuhnya. */
+  /** true = file exists but is unreadable (binary/too large) → rewind TIDAK menyentuhnya. */
   skipped?: boolean;
 }
 
@@ -21,7 +21,7 @@ export interface Checkpoint {
   id: string;
   label: string;
   createdAt: string;
-  /** Snapshot penuh agar rewind deterministik. */
+  /** Full snapshot for deterministic rewinds. */
   messages: ModelMessage[];
   filesModified: string[];
   files: FileSnapshot[];
@@ -42,7 +42,7 @@ function readText(full: string): { content: string | null; skipped: boolean } {
   try {
     if (!existsSync(full)) return { content: null, skipped: false };
     const buf = readFileSync(full);
-    // Terlalu besar / biner → lewati total (jangan di-restore, JANGAN dihapus).
+    // Too large / binary → skip entirely (never restore, NEVER delete).
     if (buf.length > MAX_FILE_BYTES) return { content: null, skipped: true };
     if (buf.includes(0)) return { content: null, skipped: true };
     return { content: buf.toString("utf-8"), skipped: false };
@@ -51,14 +51,14 @@ function readText(full: string): { content: string | null; skipped: boolean } {
   }
 }
 
-/** Buat checkpoint dari kondisi session + file saat ini. */
+/** Create a checkpoint from the current session + file state. */
 export function createCheckpoint(session: Session, workspaceDir: string, label?: string): Checkpoint {
   const dir = sessionDir(session.id);
   const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0")}`;
   const files: FileSnapshot[] = [];
   for (const rel of session.filesModified.slice(0, MAX_FILES)) {
     const full = safePath(workspaceDir, rel);
-    if (!full) continue; // di luar workspace → lewati
+    if (!full) continue; // outside the workspace → skip
     const r = readText(full);
     files.push({ path: rel, content: r.content, ...(r.skipped ? { skipped: true as const } : {}) });
   }
@@ -71,7 +71,7 @@ export function createCheckpoint(session: Session, workspaceDir: string, label?:
     files,
   };
   writeFileSync(join(dir, `${id}.json`), JSON.stringify(cp));
-  // Pangkas checkpoint lama (maks 20 per session).
+  // Prune old checkpoints (max 30 per session).
   try {
     const all = readdirSync(dir)
       .filter((f) => f.endsWith(".json"))
@@ -98,7 +98,7 @@ export function listCheckpoints(sessionId: string): Array<Pick<Checkpoint, "id" 
       const cp = JSON.parse(readFileSync(join(sessionDir(sessionId), f), "utf-8")) as Checkpoint;
       out.push({ id: cp.id, label: cp.label, createdAt: cp.createdAt, messages: cp.messages.length, files: cp.files.length });
     } catch {
-      /* lewati file rusak */
+      /* skip corrupt files */
     }
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -130,11 +130,11 @@ export interface CheckpointMeta {
 const SUBAGENT_PREFIX = "[sub-agent ";
 
 /**
- * Pasangkan pesan user (berurutan) dengan checkpoint (menaik) berdasar label.
+ * Pair user messages (in order) with checkpoints (ascending) by label.
  * Dipakai klik-kanan revert: tiap prompt user → checkpoint turn-nya.
- * Tahan terhadap compact/pruning: pesan sub-agent dilewati (tak pernah punya
+ * Resilient to compact/pruning: sub-agent messages skipped (never own
  * checkpoint), duplikat teks dipasangkan berurutan (ke-1 → ke-1), yang tak
- * cocok (ter-pruning) tidak dapat pasangan. Mengembalikan peta indeks→cpId.
+ * unmatched (pruned) ones get no pair. Returns an index→cpId map.
  */
 export function pairPromptCheckpoints(userTexts: string[], cps: CheckpointMeta[]): Map<number, string> {
   const byLabel = new Map<string, string[]>();
@@ -168,13 +168,13 @@ export interface RewindResult {
 }
 
 /**
- * Kembalikan file + riwayat session ke checkpoint. Mengembalikan session BARU
- * (caller wajib persist). File di luar workspace tidak disentuh.
+ * Restore session files + history to a checkpoint. Returns a NEW session
+ * (caller must persist). Files outside the workspace are untouched.
  */
 export function rewindToCheckpoint(session: Session, workspaceDir: string, id: string): { session: Session; result: RewindResult } {
   const cp = loadCheckpoint(session.id, id);
   if (!cp) {
-    return { session, result: { ok: false, restored: [], deleted: [], skipped: [], error: `Checkpoint '${id}' tidak ditemukan.` } };
+    return { session, result: { ok: false, restored: [], deleted: [], skipped: [], error: `Checkpoint '${id}' not found.` } };
   }
   const restored: string[] = [];
   const deleted: string[] = [];
@@ -185,15 +185,15 @@ export function rewindToCheckpoint(session: Session, workspaceDir: string, id: s
       skipped.push(snap.path);
       continue;
     }
-    // File yang di-skip saat snapshot (biner/raksasa) → jangan sentuh sama sekali.
+    // Files skipped at snapshot time (binary/huge) → never touch at all.
     if (snap.skipped) {
       skipped.push(snap.path);
       continue;
     }
     try {
       if (snap.content === null) {
-        // File tidak ada / tak terbaca saat checkpoint: hapus hanya bila kini ada
-        // DAN berupa file (jangan hapus direktori).
+        // File missing / unreadable at checkpoint time: delete only if it exists now
+        // AND is a file (never delete directories).
         if (existsSync(full)) {
           try {
             if (statSync(full).isFile()) {

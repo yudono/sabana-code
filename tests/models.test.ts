@@ -19,37 +19,37 @@ beforeEach(() => {
 });
 
 describe("model catalog", () => {
-  it("menemukan model di katalog + window-nya", () => {
+  it("finds models in the catalog + their windows", () => {
     assert.equal(findModel("gpt-4o-mini", "openai")?.contextWindow, 128_000);
     assert.equal(getContextWindow("gpt-4o-mini", "openai"), 128_000);
     assert.equal(getContextWindow("claude-sonnet-4-5", "anthropic"), 200_000);
   });
 
-  it("mendukung format provider/model", () => {
+  it("supports the provider/model format", () => {
     assert.ok(findModel("openai/gpt-4o"));
   });
 
-  it("fallback ke default provider untuk model tak dikenal", () => {
+  it("falls back to the provider default for unknown models", () => {
     assert.equal(getContextWindow("model-aneh", "openai"), 128_000);
     assert.equal(getContextWindow("model-aneh", "ollama"), 32_768);
     assert.equal(getContextWindow("model-aneh", "provider-aneh"), 32_768);
   });
 
-  it("window berbeda antar model", () => {
+  it("windows differ per model", () => {
     assert.ok(getContextWindow("gpt-4.1", "openai") > getContextWindow("gpt-4o-mini", "openai"));
   });
 
-  it("listModels bisa difilter provider", () => {
+  it("listModels filters by provider", () => {
     assert.ok(listModels("ollama").length > 0);
     assert.ok(listModels("ollama").every((m) => m.provider === "ollama"));
   });
 
-  it("estimasi token ~4 char", () => {
+  it("token estimate ~4 chars", () => {
     assert.equal(estimateTokens("abcd"), 1);
     assert.equal(estimateTokens("a".repeat(400)), 100);
   });
 
-  it("resolveProvider mock/ollama tak butuh key", () => {
+  it("resolveProvider mock/ollama need no key", () => {
     assert.equal(resolveProvider("mock").needsKey, false);
     assert.equal(resolveProvider("ollama").needsKey, false);
     assert.equal(resolveProvider("openai").needsKey, true);

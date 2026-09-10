@@ -1,8 +1,8 @@
 // ─── MCP client (Model Context Protocol, stdio NDJSON) ala OpenCode/Claude Code ───
 // Konfig: ~/sabana-code/mcp.json
-//   { "servers": { "nama": { "command": "npx", "args": ["-y", "..."], "env": {...} } } }
-// Tiap server yang jalan menyumbang tools `mcp__<server>__<tool>` ke agent.
-// Gagal start / timeout → server ditandai down, agent tetap jalan tanpa tools-nya.
+//   { "servers": { "name": { "command": "npx", "args": ["-y", "..."], "env": {...} } } }
+// Each running server contributes `mcp__<server>__<tool>` to the agent.
+// Start failure / timeout → server marked down, agent keeps going without its tools.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ensureHome, mcpPath } from "./home.js";
@@ -23,7 +23,7 @@ export interface McpConfigFile {
 export const MCP_TOOL_PREFIX = "mcp__";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/** mcp__<server>__<tool> — server/tool hanya [a-z0-9_-] agar aman jadi nama tool. */
+/** mcp__<server>__<tool> — server/tool restricted to [a-z0-9_-] to be safe tool names. */
 export function mcpToolName(server: string, tool: string): string {
   const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").slice(0, 40) || "x";
   return `${MCP_TOOL_PREFIX}${clean(server)}__${clean(tool)}`;
@@ -76,7 +76,7 @@ interface McpToolDesc {
   inputSchema?: Record<string, unknown>;
 }
 
-// ─── Jangan tinggalkan server yatim: bunuh semua child saat proses keluar ───
+// ─── Never leave orphan servers: kill all children on process exit ───
 const LIVE_CLIENTS = new Set<McpClient>();
 let exitHookInstalled = false;
 function installExitHook(): void {
@@ -173,12 +173,12 @@ export class McpClient {
   }
 
   request(method: string, params: unknown): Promise<unknown> {
-    if (!this.proc?.stdin) return Promise.reject(new Error(`MCP server '${this.name}' tidak jalan`));
+    if (!this.proc?.stdin) return Promise.reject(new Error(`MCP server '${this.name}' is not running`));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`MCP '${this.name}' timeout ${this.timeoutMs}ms untuk ${method}`));
+        reject(new Error(`MCP '${this.name}' timed out after ${this.timeoutMs}ms on ${method}`));
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
@@ -197,7 +197,7 @@ export class McpClient {
     return tools.filter((t) => t && typeof t.name === "string" && t.name);
   }
 
-  /** tools/call → teks gabungan (content blocks) agar cocok dengan pipeline redact/trim. */
+  /** tools/call → joined text (content blocks) to fit the redact/trim pipeline. */
   async callTool(tool: string, args: Record<string, unknown>): Promise<unknown> {
     const res = (await this.request("tools/call", { name: tool, arguments: args || {} })) as {
       content?: Array<{ type: string; text?: string }>;
@@ -208,14 +208,14 @@ export class McpClient {
       .map((b) => (b && typeof b.text === "string" ? b.text : b ? JSON.stringify(b) : ""))
       .filter(Boolean)
       .join("\n");
-    if (res?.isError) return { error: text || `MCP tool ${tool} gagal` };
+    if (res?.isError) return { error: text || `MCP tool ${tool} failed` };
     return text || res;
   }
 
   stop(): void {
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
-      p.reject(new Error(`MCP server '${this.name}' dihentikan`));
+      p.reject(new Error(`MCP server '${this.name}' stopped`));
     }
     this.pending.clear();
     LIVE_CLIENTS.delete(this);
@@ -240,13 +240,13 @@ export interface McpServerStatus {
   error?: string;
 }
 
-/** Manager: mulai server sesuai config, petakan tools MCP → ToolDefinition + handler. */
+/** Manager: start servers per config, map MCP tools → ToolDefinition + handler. */
 export class McpManager {
   private clients = new Map<string, McpClient>();
   private toolToServer = new Map<string, { server: string; tool: string; client: McpClient }>();
   private statuses: McpServerStatus[] = [];
 
-  /** Idempoten: server yang sudah up tidak di-start ulang. */
+  /** Idempotent: running servers are never restarted. */
   async ensureLoaded(): Promise<{ tools: ToolDefinition[]; errors: string[] }> {
     const cfg = loadMcpConfig();
     const defs: ToolDefinition[] = [];
@@ -284,7 +284,7 @@ export class McpManager {
         statuses.push({ name, state: "down", tools: [], error: (e as Error).message });
       }
     }
-    // Server yang dihapus dari config → hentikan.
+    // Servers removed from config → stop them.
     for (const [name, client] of this.clients) {
       if (!cfg.servers[name]) {
         client.stop();
@@ -318,13 +318,13 @@ export class McpManager {
   }
 }
 
-/** Seed mcp.json contoh (dikomentari) bila belum ada — dokumentasi hidup. */
+/** Seed a sample (commented) mcp.json when missing — living documentation. */
 export function ensureMcpConfigSeed(): void {
   ensureHome();
   if (existsSync(mcpPath())) return;
   saveMcpConfig({
     servers: {
-      // Contoh: aktifkan dengan menghapus garis bawah depan.
+      // Example: enable by removing the leading underscore.
       // "_fetch": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-fetch"] },
     },
   });

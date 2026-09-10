@@ -1,7 +1,7 @@
-// ─── Mock LLM provider untuk benchmark ───
-// Deterministik: memutar skrip tool-call per task, lalu menjawab final.
-// Memungkinkan harness benchmark diuji end-to-end tanpa LLM key/biaya,
-// dengan pola yang sama seperti provider asli (event tool_call → finish).
+// ─── Mock LLM provider for benchmarks ───
+// Deterministic: replays a per-task tool-call script, then answers final.
+// Lets the benchmark harness run end-to-end with no LLM key/cost,
+// following the same pattern as real providers (tool_call → finish events).
 import type { LLMProvider } from "./provider.js";
 import type { ModelEvent, ModelRequest } from "./types.js";
 
@@ -13,7 +13,7 @@ export interface MockStep {
 let plan: MockStep[] = [];
 let consumed = false;
 
-/** Diisi harness sebelum setiap task. Task berjalan sekuensial sehingga aman. */
+/** Filled by the harness before each task. Tasks run sequentially, so this is safe. */
 export function setMockPlan(p: MockStep[]): void {
   plan = p;
   consumed = false;

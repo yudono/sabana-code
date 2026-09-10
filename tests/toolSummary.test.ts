@@ -29,24 +29,24 @@ describe("fmt helpers", () => {
 });
 
 describe("summarizeCall", () => {
-  it("file tool hanya tampil nama + path", () => {
+  it("file tools show name + path only", () => {
     assert.equal(summarizeCall("read_file", { path: "App.tsx" }), "read_file App.tsx");
     assert.equal(summarizeCall("modified_file", { path: "App.tsx" }), "modified_file App.tsx");
     assert.equal(summarizeCall("write_file", { path: "a/b.ts" }), "write_file a/b.ts");
   });
 
-  it("read_file menyertakan rentang bila diminta", () => {
+  it("read_file includes the range when asked", () => {
     assert.equal(
       summarizeCall("read_file", { path: "App.tsx", startLine: 10, endLine: 50 }),
       "read_file App.tsx:10-50",
     );
   });
 
-  it("shell jadi satu baris $ ...", () => {
+  it("shell collapses to one $ line ...", () => {
     assert.equal(summarizeCall("shell", { command: "npm test" }), "$ npm test");
   });
 
-  it("tool cari ringkas", () => {
+  it("search tools stay concise", () => {
     assert.equal(summarizeCall("grep", { query: "useState" }), 'grep "useState"');
     assert.equal(summarizeCall("glob", { pattern: "**/*.ts" }), "glob **/*.ts");
     assert.equal(summarizeCall("list_directory", { path: "src" }), "list src");
@@ -54,32 +54,32 @@ describe("summarizeCall", () => {
     assert.equal(summarizeCall("web_fetch", { url: "https://x.test/a" }), "fetch https://x.test/a");
   });
 
-  it("tidak pernah memuat isi konten", () => {
+  it("never includes content bodies", () => {
     const s = summarizeCall("write_file", { path: "a.txt", content: "RAHASIA".repeat(100) });
     assert.ok(!s.includes("RAHASIA"));
   });
 });
 
 describe("summarizeResult", () => {
-  it("error dipadatkan satu baris", () => {
+  it("errors collapse to one line", () => {
     const s = summarizeResult("read_file", { status: "error", output: { error: "File not found: x\nbaris2" }, durationMs: 5 });
     assert.equal(s, "File not found: x");
   });
 
-  it("read: rentang baris, bukan isi", () => {
+  it("read: line ranges, not contents", () => {
     const s = summarizeResult("read_file", {
       status: "success",
       output: { startLine: 1, endLine: 50, totalLines: 320, content: "ISI".repeat(500) },
       durationMs: 3,
     });
-    assert.equal(s, "baris 1–50 dari 320");
+    assert.equal(s, "lines 1–50 of 320");
     assert.ok(!s!.includes("ISI"));
   });
 
-  it("write: +byte + jumlah baris", () => {
+  it("write: +bytes + line count", () => {
     assert.equal(
       summarizeResult("write_file", { status: "success", output: { bytes: 11_200, lines: 45 }, durationMs: 3 }),
-      "+11.2k, 45 baris",
+      "+11.2k, 45 lines",
     );
   });
 
@@ -99,18 +99,18 @@ describe("summarizeResult", () => {
     );
   });
 
-  it("delete: status hapus", () => {
+  it("delete: removal status", () => {
     assert.equal(
       summarizeResult("delete_file", { status: "success", output: { path: "a.txt", deleted: true }, durationMs: 3 }),
-      "(dihapus)",
+      "(deleted)",
     );
     assert.equal(
       summarizeResult("delete_file", { status: "success", output: { path: "d", deleted: true, directory: true }, durationMs: 3 }),
-      "(direktori dihapus)",
+      "(directory deleted)",
     );
   });
 
-  it("shell: exit + durasi", () => {
+  it("shell: exit + duration", () => {
     assert.equal(
       summarizeResult("shell", { status: "success", output: { exitCode: 0 }, durationMs: 1200 }),
       "exit 0 · 1.2s",
@@ -121,16 +121,16 @@ describe("summarizeResult", () => {
     );
   });
 
-  it("pencarian: hitungan saja", () => {
-    assert.equal(summarizeResult("grep", { status: "success", output: { count: 7 }, durationMs: 1 }), "7 cocok");
-    assert.equal(summarizeResult("glob", { status: "success", output: { count: 3 }, durationMs: 1 }), "3 file");
+  it("search: counts only", () => {
+    assert.equal(summarizeResult("grep", { status: "success", output: { count: 7 }, durationMs: 1 }), "7 matches");
+    assert.equal(summarizeResult("glob", { status: "success", output: { count: 3 }, durationMs: 1 }), "3 files");
     assert.equal(
       summarizeResult("list_directory", { status: "success", output: { entries: 12 }, durationMs: 1 }),
-      "12 entri",
+      "12 entries",
     );
     assert.equal(
       summarizeResult("web_search", { status: "success", output: { results: [{}, {}] }, durationMs: 1 }),
-      "2 hasil",
+      "2 results",
     );
     assert.equal(
       summarizeResult("web_fetch", { status: "success", output: { length: 5200 }, durationMs: 1 }),

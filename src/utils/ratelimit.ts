@@ -1,6 +1,6 @@
-// ─── Rate limiter: batasi request LLM per menit (sliding window) ───
-// Melindungi dari loop liar yang membakar kuota + kena 429 provider.
-// rpm <= 0 berarti tanpa batas (dipakai bila provider lokal tanpa limit).
+// ─── Rate limiter: cap LLM requests per minute (sliding window) ───
+// Guards against runaway loops burning quota + provider 429s.
+// rpm <= 0 means unlimited (used for local limitless providers).
 export class RateLimiter {
   private stamps: number[] = [];
 
@@ -22,7 +22,7 @@ export class RateLimiter {
     this.stamps = this.stamps.filter((t) => now - t < this.windowMs);
   }
 
-  /** Tunggu sampai ada slot kosong. Menolak bila signal diabort. */
+  /** Wait for a free slot. Refuses when the signal aborts. */
   async acquire(signal?: AbortSignal): Promise<void> {
     if (this.maxPerMinute <= 0) return;
     for (;;) {

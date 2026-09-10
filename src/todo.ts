@@ -1,7 +1,7 @@
-// ─── Todo queue ala Claude Code (TodoWrite): rencana kerja multi-langkah ───
+// ─── Todo queue ala Claude Code (TodoWrite): multi-step work plans ───
 // Disimpan per project: ~/sabana-code/todos/<projectHash>.json — jadi antrean
-// tetap ada walau session berganti. Agent memakai tools `todo_write` / `todo_list`,
-// user memantau via /todo di TUI.
+// survives session switches. The agent uses `todo_write` / `todo_list`,
+// users watch via /todo in the TUI.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureHome, todosDir } from "./home.js";
@@ -59,30 +59,30 @@ export function saveTodos(workspaceDir: string, items: TodoItem[]): TodoList {
 }
 
 function cleanInput(raw: unknown): { ok: true; items: TodoItem[] } | { ok: false; error: string } {
-  if (!Array.isArray(raw)) return { ok: false, error: "todos harus array of {content, status, priority}" };
-  if (raw.length > MAX_TODOS) return { ok: false, error: `Maks ${MAX_TODOS} todos per project` };
+  if (!Array.isArray(raw)) return { ok: false, error: "todos must be an array of {content, status, priority}" };
+  if (raw.length > MAX_TODOS) return { ok: false, error: `Max ${MAX_TODOS} todos per project` };
   const seen = new Set<string>();
   const items: TodoItem[] = [];
   for (let i = 0; i < raw.length; i++) {
     const t = raw[i] as Partial<TodoItem>;
     const content = typeof t?.content === "string" ? t.content.trim().slice(0, 300) : "";
-    if (!content) return { ok: false, error: `todos[${i}].content wajib diisi` };
+    if (!content) return { ok: false, error: `todos[${i}].content is required` };
     const status = VALID_STATUS.includes(t.status as TodoStatus) ? (t.status as TodoStatus) : "pending";
     const priority = VALID_PRIORITY.includes(t.priority as TodoPriority) ? (t.priority as TodoPriority) : "medium";
     const id = typeof t.id === "string" && t.id.trim() ? t.id.trim().slice(0, 40) : `t${i + 1}`;
-    if (seen.has(id)) return { ok: false, error: `id duplikat: ${id}` };
+    if (seen.has(id)) return { ok: false, error: `duplicate id: ${id}` };
     seen.add(id);
     items.push({ id, content, status, priority });
   }
-  // Maks 1 in_progress — cegah agent "mengerjakan semuanya sekaligus".
+  // Maks 1 in_progress — stops the agent "working on everything at once".
   const active = items.filter((t) => t.status === "in_progress");
-  if (active.length > 1) return { ok: false, error: "Maks 1 todo berstatus in_progress dalam satu waktu" };
+  if (active.length > 1) return { ok: false, error: "Max 1 in_progress todo at a time" };
   return { ok: true, items };
 }
 
-/** Satu baris ringkas untuk tampilan TUI / summary tool. */
+/** One concise line for TUI display / tool summaries. */
 export function formatTodos(items: TodoItem[]): string {
-  if (items.length === 0) return "(belum ada todo)";
+  if (items.length === 0) return "(no todos yet)";
   const icon = { pending: "○", in_progress: "◐", completed: "●" } as const;
   return items
     .map((t) => `  ${icon[t.status]} [${t.priority}] ${t.content}`)
@@ -93,13 +93,13 @@ export function formatTodos(items: TodoItem[]): string {
 export const todoWriteTool: ToolDefinition = {
   name: "todo_write",
   description:
-    "Tulis/refresh SELURUH daftar todo (maks 50, maks 1 in_progress). Pakai untuk tugas multi-langkah: pecah jadi langkah kecil, tandai in_progress saat dikerjakan, completed saat selesai.",
+    "Write/refresh the ENTIRE todo list (max 50, max 1 in_progress). Use for multi-step tasks: break into small steps, mark in_progress while working, completed when done.",
   inputSchema: {
     type: "object",
     properties: {
       todos: {
         type: "array",
-        description: "Daftar todo lengkap (menggantikan yang lama)",
+        description: "Complete todo list (replaces the old one)",
         items: {
           type: "object",
           properties: {
@@ -121,7 +121,7 @@ export const todoWriteTool: ToolDefinition = {
 
 export const todoListTool: ToolDefinition = {
   name: "todo_list",
-  description: "Baca daftar todo project saat ini (tanpa mengubah).",
+  description: "Read the current project todo list (no changes).",
   inputSchema: { type: "object", properties: {} },
   permissions: { requiresPermission: false },
   timeout: 10_000,

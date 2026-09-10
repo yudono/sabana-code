@@ -1,23 +1,23 @@
-// ─── sabana-sandbox: eksekusi perintah terminal dengan akses sandbox ───
-// SATU PINTU untuk seluruh tool `shell`: tiap command terminal agent lewat sini.
-// Disaring GANDA (double filter):
-//   Lapisan 1 — kebijakan statis: pola yang SELALU diblokir. Persetujuan user
-//               (y/a) TIDAK bisa meng-override. Contoh: `sabana-sandbox "rm -rf /"`
+// ─── sabana-sandbox: sandboxed terminal command execution ───
+// SINGLE GATE for the whole `shell` tool: every agent terminal command passes here.
+// DOUBLE filtered:
+//   Layer 1 — static policy: patterns that are ALWAYS blocked. User approval
+//               (y/a) CANNOT override. Example: `sabana-sandbox "rm -rf /"`
 //               → restrict, `sudo ...` → restrict, `curl X | sh` → restrict.
-//   Lapisan 2 — kurungan workspace: semua path (absolut/relatif, termasuk target
-//               redireksi) harus di dalam workspace. `cd` dilacak per rantai
-//               (&& / ; / ||) sehingga `cd / && rm -rf .` ikut tertangkap.
+//   Layer 2 — workspace jail: all paths (absolute/relative, incl. redirect
+//               targets) must stay inside the workspace. `cd` is tracked per chain
+//               (&& / ; / ||) so `cd / && rm -rf .` is caught too.
 //
-// Model ancaman: agent berjalan sebagai user yang sama — yang dijaga adalah
-// kesalahan fatal (hapus root, timpa sistem, eskalasi sudo), BUKAN agent jahat
-// (ia memang sudah bisa menulis file). Perintah legal seperti `rm -rf .next`
-// atau `npm install` di dalam workspace TETAP jalan (perlu izin user dulu).
+// Threat model: the agent runs as the same user — what is guarded against is
+// fatal mistakes (wiping root, overwriting the system, sudo escalation), NOT a
+// malicious agent (it can already write files). Legal commands like `rm -rf .next`
+// or `npm install` inside the workspace STILL run (user approval first).
 import { spawn } from "node:child_process";
 import { resolve, basename, dirname } from "node:path";
 
 export interface SandboxVerdict {
   allowed: boolean;
-  /** Alasan penolakan (untuk pesan SANDBOX BLOCKED). */
+  /** Refusal reason (for SANDBOX BLOCKED messages). */
   reason?: string;
 }
 
@@ -26,14 +26,14 @@ export interface SandboxRunResult {
   stdout: string;
   stderr: string;
   durationMs: number;
-  /** Terisi bila diblokir analisis statis (tidak dieksekusi sama sekali). */
+  /** Set when blocked by static analysis (never executed at all). */
   blocked?: string;
 }
 
 export interface SandboxRunOptions {
   timeoutMs?: number;
   maxOutputChars?: number;
-  /** Direktori mulai relatif/absolut (harus di dalam workspace). Default: workspace root. */
+  /** Relative/absolute start directory (must stay inside the workspace). Default: workspace root. */
   cwd?: string;
 }
 
@@ -41,7 +41,7 @@ const MAX_COMMAND_CHARS = 20_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT = 50_000;
 
-// Basis perintah yang TIDAK BOLEH jalan walau user menyetujui.
+// Command bases that must NEVER run even with user approval.
 const HARD_DENY_BASES = new Set([
   "sudo", "su", "doas", "runas", // eskalasi privilege
   "mkfs", "fdisk", "parted", "gdisk", // hancurkan disk
@@ -51,20 +51,20 @@ const HARD_DENY_BASES = new Set([
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish", "ksh"]);
 const DOWNLOADERS = new Set(["curl", "wget", "fetch", "aria2c"]);
-// Basis destruktif: target `$VAR` yang tak bisa diverifikasi → tolak (takutnya /).
+// Destructive bases: `$VAR` targets that cannot verify → refuse (could be /).
 const STRICT_BASES = new Set(["rm", "shred"]);
-// Kata yang dilewati sebelum basis asli (wrapper/builtin/pengukur).
+// Words skipped before the real base (wrapper/builtin/measurer).
 const WRAPPERS = new Set(["command", "builtin", "env", "time", "nohup", "setsid", "exec"]);
 
-// Target rm yang SELALU ditolak (tak peduli workspace).
+// rm targets that are ALWAYS refused (regardless of workspace).
 const RM_NUKE = new Set(["/", "/*", "~", "~/*", "$HOME", "${HOME}", "$HOME/*", "${HOME}/*"]);
 
-// ─── Tokenizer sadar-quote ───
+// ─── Quote-aware tokenizer ───
 interface Token {
   text: string;
 }
 
-/** Pecah segmen jadi kata (hormati '...', "...", backslash). Quote dilepas. */
+/** Split a segment into words (respecting '...', "...", backslash). Quotes stripped. */
 function tokenize(seg: string): Token[] {
   const out: Token[] = [];
   let cur = "";
@@ -111,7 +111,7 @@ interface Segment {
   sep: string;
 }
 
-/** Belah perintah per operator terluar (abaikan yang di dalam quote). */
+/** Split a command on top-level operators (ignoring quoted ones). */
 function splitSegments(cmd: string): Segment[] {
   const segs: Segment[] = [];
   let cur = "";
@@ -162,7 +162,7 @@ function splitSegments(cmd: string): Segment[] {
   return segs.map((s) => ({ text: s.text.trim(), sep: s.sep })).filter((s) => s.text);
 }
 
-/** Basis biner segmen (basename, lewati VAR=x + wrapper). "" bila kosong. */
+/** Segment binary base (basename, skipping VAR=x + wrappers). "" when empty. */
 function baseOf(words: string[]): string {
   let i = 0;
   for (;;) {
@@ -182,7 +182,7 @@ function baseOf(words: string[]): string {
   return basename(first).toLowerCase();
 }
 
-/** Kembalikan kata argumen (tanpa VAR=x dan wrapper depan). */
+/** Return argument words (without VAR=x and leading wrappers). */
 function argWords(words: string[]): string[] {
   let i = 0;
   for (;;) {
@@ -210,7 +210,7 @@ function hasOtherVar(tok: string): boolean {
   return t.includes("$");
 }
 
-/** Terlihat seperti path? (absolut, ~/.., ./.., ../.., $VAR.., atau mengandung /) */
+/** Looks like a path? (absolute, ~/.., ./.., ../.., $VAR.., or contains /) */
 function looksLikePath(tok: string): boolean {
   if (!tok || tok === "-" || tok === "--") return false;
   if (tok.startsWith("-") && !tok.includes("/")) return false; // flag
@@ -223,7 +223,7 @@ function looksLikePath(tok: string): boolean {
   );
 }
 
-/** Direktori statis untuk token berglob: potong di segmen glob pertama. */
+/** Static directory for glob tokens: cut at the first glob segment. */
 function staticDirOf(tok: string): string {
   const parts = tok.split("/");
   const kept: string[] = [];
@@ -245,22 +245,22 @@ function deny(reason: string): SandboxVerdict {
 }
 
 /**
- * Analisis statis TANPA eksekusi. Mengembalikan { allowed: true } bila lolos
- * kedua lapisan, atau { allowed: false, reason } bila kena restrict.
+ * Static analysis WITHOUT execution. Returns { allowed: true } when passing
+ * both layers, or { allowed: false, reason } when restricted.
  */
 export function analyzeCommand(command: string, workspaceDir: string, startDir?: string): SandboxVerdict {
   const cmd = (command || "").trim();
-  if (!cmd) return deny("perintah kosong");
-  if (cmd.length > MAX_COMMAND_CHARS) return deny(`perintah > ${MAX_COMMAND_CHARS} char — pecah jadi langkah kecil`);
+  if (!cmd) return deny("empty command");
+  if (cmd.length > MAX_COMMAND_CHARS) return deny(`command > ${MAX_COMMAND_CHARS} chars — split into smaller steps`);
   const ws = resolve(workspaceDir);
   const start = startDir ? resolve(ws, startDir) : ws;
-  if (!insideWorkspace(start, ws)) return deny(`direktori kerja '${startDir}' keluar workspace — restrict`);
+  if (!insideWorkspace(start, ws)) return deny(`working directory '${startDir}' is outside the workspace — restrict`);
 
-  // ── Pola keras di seluruh teks (termasuk dalam $(...) / backtick) ──
-  if (/(^|[^\w]):\(\)\s*\{/.test(cmd)) return deny("fork bomb terdeteksi — restrict");
+  // ── Hard patterns across the whole text (incl. inside $(...) / backticks) ──
+  if (/(^|[^\w]):\(\)\s*\{/.test(cmd)) return deny("fork bomb detected — restrict");
 
-  // curl|wget ... | sh → eksekusi remote otomatis. Telusuri rantai pipa:
-  // stage shell yang menerima pipa dari downloader di kirinya = blokir.
+  // curl|wget ... | sh → automatic remote execution. Walk the pipe chain:
+  // a shell stage piped from a downloader on its left = block.
   const segs = splitSegments(cmd);
   const stages: Array<{ base: string }> = segs.map((s) => ({
     base: baseOf(tokenize(s.text).map((t) => t.text)),
@@ -270,35 +270,35 @@ export function analyzeCommand(command: string, workspaceDir: string, startDir?:
     let j = i - 1;
     while (j >= 0 && segs[j + 1] && segs[j + 1].sep === "|") {
       if (DOWNLOADERS.has(stages[j].base)) {
-        return deny(`${stages[j].base} | ${stages[i].base}: eksekusi remote otomatis — restrict. Download dulu, baca isinya, baru jalankan manual.`);
+        return deny(`${stages[j].base} | ${stages[i].base}: remote code execution — restrict. Download first, read it, then run manually.`);
       }
       j--;
     }
   }
 
   // ── Per segmen: basis keras + redireksi + cd-tracking + kurungan path ──
-  let vcwd: string | null = start; // cwd virtual, mulai dari direktori mulai
+  let vcwd: string | null = start; // virtual cwd, starts at the start directory
   for (let si = 0; si < segs.length; si++) {
     const seg = segs[si];
-    // Catatan: stage pipa (|) berjalan paralel di direktori yang sama —
-    // cd di dalam pipa diabaikan (cukup untuk analisis statis).
+    // Note: pipe (|) stages run in parallel in the same directory —
+    // cd inside pipes is ignored (good enough for static analysis).
     const words = tokenize(seg.text).map((t) => t.text);
     if (words.length === 0) continue;
     const base = baseOf(words);
     if (!base) continue;
     if (HARD_DENY_BASES.has(base)) {
-      return deny(`'${base}' dilarang sandbox (eskalasi/merusak sistem) — restrict`);
+      return deny(`'${base}' is forbidden by the sandbox (escalation/system damage) — restrict`);
     }
 
-    // cd dilacak agar `cd / && rm -rf .` tertangkap. cd di dalam pipa (|)
-    // jalan di subshell → tak merambat, jadi diabaikan di sini.
+    // cd is tracked so `cd / && rm -rf .` is caught. cd inside pipes (|)
+    // runs in a subshell → does not propagate, so ignored here.
     if (base === "cd" && seg.sep !== "|") {
       const args = argWords(words);
       const target = args[0];
       if (!target || target === "~") {
         vcwd = process.env.HOME ? resolve(process.env.HOME) : null;
       } else if (target === "-") {
-        vcwd = null; // tak diketahui → relatif berikutnya tak terverifikasi
+        vcwd = null; // unknown → following relatives unverifiable
       } else {
         const exp = expandHome(target);
         vcwd = exp.startsWith("/") ? resolve(exp) : vcwd ? resolve(vcwd, exp) : null;
@@ -306,14 +306,14 @@ export function analyzeCommand(command: string, workspaceDir: string, startDir?:
       continue;
     }
 
-    // Heredoc ke shell = skrip inline tak terlihat → tolak.
+    // Heredoc into a shell = invisible inline script → refuse.
     if (SHELLS.has(base) && /(^|\s)<<-?\s*\S/.test(seg.text)) {
-      return deny(`heredoc ke '${base}' menyembunyikan skrip — restrict. Tulis file via write_file lalu jalankan.`);
+      return deny(`heredoc into '${base}' hides a script — restrict. Write a file via write_file, then run it.`);
     }
 
     const args = argWords(words);
 
-    // Redireksi: target harus di dalam workspace (kecuali duplikat fd &N).
+    // Redirects: target must stay inside the workspace (except &N fd dups).
     for (let k = 0; k < args.length; k++) {
       const w = args[k];
       const m = /^(?:\d+)?(>>?|<\<?)(.*)$/.exec(w);
@@ -322,23 +322,23 @@ export function analyzeCommand(command: string, workspaceDir: string, startDir?:
       let target = m[2];
       if (!target && k + 1 < args.length) target = args[++k];
       if (!target) continue;
-      if (/^&\d*$/.test(target)) continue; // duplikat fd (2>&1) — aman
-      if (op.startsWith("<<")) continue; // heredoc delimiter — ditangani di atas
-      if (hasOtherVar(target)) return deny(`redireksi ke '${target}': target tak bisa diverifikasi di dalam workspace — restrict`);
+      if (/^&\d*$/.test(target)) continue; // fd dup (2>&1) — safe
+      if (op.startsWith("<<")) continue; // heredoc delimiter — handled above
+      if (hasOtherVar(target)) return deny(`redirect to '${target}': target cannot be verified inside the workspace — restrict`);
       const full = resolve(vcwd || ws, expandHome(staticDirOf(target)));
       if (!insideWorkspace(full, ws)) {
-        return deny(`redireksi ke '${target}' keluar workspace (${ws}) — restrict`);
+        return deny(`redirect to '${target}' outside the workspace (${ws}) — restrict`);
       }
     }
 
-    // rm nuklir eksplisit.
+    // Explicit nuclear rm.
     if (base === "rm" && args.some((a) => RM_NUKE.has(a))) {
-      return deny(`'${seg.text.trim().slice(0, 80)}': menghapus root/home — restrict`);
+      return deny(`'${seg.text.trim().slice(0, 80)}': deletes root/home — restrict`);
     }
 
-    // Kurungan path untuk semua token mirip-path (kecuali argv0 = binernya sendiri).
-    // Untuk basis destruktif (rm/shred), SEMUA arg non-flag adalah path —
-    // nama relatif polos seperti `app` pun harus terverifikasi.
+    // Path jail for all path-like tokens (except argv0 = the binary itself).
+    // For destructive bases (rm/shred), ALL non-flag args are paths —
+    // even bare relative names like `app` must verify.
     const isStrict = STRICT_BASES.has(base);
     let sawTarget = false;
     for (const tok of args) {
@@ -349,22 +349,22 @@ export function analyzeCommand(command: string, workspaceDir: string, startDir?:
       sawTarget = true;
       if (hasOtherVar(tok)) {
         if (isStrict) {
-          return deny(`'${base} ${tok}': target mengandung variabel tak dikenal — tak bisa dipastikan di dalam workspace. Tulis path eksplisit.`);
+          return deny(`'${base} ${tok}': target contains an unknown variable — cannot verify it is inside the workspace. Write an explicit path.`);
         }
-        continue; // non-destruktif + sudah disetujui user → lewat
+        continue; // non-destructive + already user-approved → pass
       }
       const dirPart = staticDirOf(expandHome(tok));
       const full = dirPart.startsWith("/") ? resolve(dirPart) : resolve(vcwd || ws, dirPart);
       if (!insideWorkspace(full, ws)) {
         if (STRICT_BASES.has(base)) {
-          return deny(`'${base} ${tok}' keluar workspace (${ws}) — restrict`);
+          return deny(`'${base} ${tok}' is outside the workspace (${ws}) — restrict`);
         }
-        return deny(`path '${tok}' keluar workspace (${ws}) — restrict. Kerjakan di dalam workspace.`);
+        return deny(`path '${tok}' is outside the workspace (${ws}) — restrict. Work inside the workspace.`);
       }
     }
-    // rm/shred tanpa target path terverifikasi = pola berbahaya/tak jelas → tolak.
+    // rm/shred with no verified path target = dangerous/unclear pattern → refuse.
     if (isStrict && !sawTarget) {
-      return deny(`'${base}' tanpa target di dalam workspace — restrict. Tulis path eksplisit.`);
+      return deny(`'${base}' has no target inside the workspace — restrict. Write an explicit path.`);
     }
   }
 
@@ -372,9 +372,9 @@ export function analyzeCommand(command: string, workspaceDir: string, startDir?:
 }
 
 /**
- * Eksekusi via sabana-sandbox: analisis dulu, baru jalan dengan cwd=workspace,
- * timeout bunuh, dan output dibatasi. TIDAK PERNAH melempar untuk blocked —
- * kembalikan { blocked } agar caller menampilkan SANDBOX BLOCKED.
+ * Execute via sabana-sandbox: analyze first, then run with cwd=workspace,
+ * kill-on-timeout, and capped output. NEVER throw for blocked —
+ * return { blocked } so the caller shows SANDBOX BLOCKED.
  */
 export async function runSandboxed(
   command: string,
@@ -384,7 +384,7 @@ export async function runSandboxed(
   const ws = resolve(workspaceDir);
   const start = opts?.cwd ? resolve(ws, opts.cwd) : ws;
   if (!insideWorkspace(start, ws)) {
-    return { exitCode: 1, stdout: "", stderr: "", durationMs: 0, blocked: `direktori kerja '${opts?.cwd}' keluar workspace — restrict` };
+    return { exitCode: 1, stdout: "", stderr: "", durationMs: 0, blocked: `working directory '${opts?.cwd}' is outside the workspace — restrict` };
   }
   const verdict = analyzeCommand(command, workspaceDir, opts?.cwd);
   if (!verdict.allowed) {
@@ -392,7 +392,7 @@ export async function runSandboxed(
   }
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxChars = opts?.maxOutputChars ?? DEFAULT_MAX_OUTPUT;
-  // Samarkan perintah `cd sandbox && ...` warisan (pola lama) — sandbox kini implisit.
+  // Mask legacy `cd sandbox && ...` commands (old pattern) — sandbox is implicit now.
   const cmd = command
     .replace(/^\s*cd\s+sandbox\s*(?:&&|;)?\s*/, "")
     .replace(/\bsandbox\//g, "./");
@@ -432,12 +432,12 @@ export async function runSandboxed(
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      const tail = truncated ? `\n... [output dipotong, maks ${maxChars} char]` : "";
+      const tail = truncated ? `\n... [output truncated, max ${maxChars} chars]` : "";
       const timedOut = signal === "SIGKILL";
       resolveP({
         exitCode: timedOut ? 124 : (code ?? 1),
         stdout: (stdout + (truncated ? tail : "")).slice(0, maxChars + tail.length),
-        stderr: timedOut ? `timed out setelah ${timeoutMs}ms` : stderr,
+        stderr: timedOut ? `timed out after ${timeoutMs}ms` : stderr,
         durationMs: Date.now() - startTime,
       });
     });

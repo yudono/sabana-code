@@ -18,14 +18,14 @@ function ws(): string {
 }
 
 describe("todo queue", () => {
-  it("awal kosong", () => {
+  it("starts empty", () => {
     isolatedHome();
     const l = loadTodos(ws());
     assert.deepEqual(l.items, []);
-    assert.equal(formatTodos([]), "(belum ada todo)");
+    assert.equal(formatTodos([]), "(no todos yet)");
   });
 
-  it("todo_write simpan + todo_list baca", async () => {
+  it("todo_write saves + todo_list reads", async () => {
     isolatedHome();
     const w = ws();
     const wr = todoWriteHandler(w);
@@ -49,7 +49,7 @@ describe("todo queue", () => {
     assert.ok(fmt.includes("○"));
   });
 
-  it("tolak 2 in_progress sekaligus", async () => {
+  it("rejects 2 in_progress at once", async () => {
     isolatedHome();
     const r = (await todoWriteHandler(ws())({
       todos: [
@@ -60,16 +60,16 @@ describe("todo queue", () => {
     assert.ok(r.error?.includes("in_progress"));
   });
 
-  it("tolak content kosong & id duplikat", async () => {
+  it("rejects empty content & duplicate ids", async () => {
     isolatedHome();
     const h = todoWriteHandler(ws());
     assert.ok(((await h({ todos: [{ content: "  " }] })) as { error?: string }).error);
     assert.ok(
-      ((await h({ todos: [{ id: "x", content: "a" }, { id: "x", content: "b" }] })) as { error?: string }).error?.includes("duplikat"),
+      ((await h({ todos: [{ id: "x", content: "a" }, { id: "x", content: "b" }] })) as { error?: string }).error?.includes("duplicate"),
     );
   });
 
-  it("per project terpisah", async () => {
+  it("separated per project", async () => {
     isolatedHome();
     const a = ws();
     const b = ws();

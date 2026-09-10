@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { detectLang, detectLangFromContent, highlight, stripAnsi } from "../src/tui/highlight.js";
 
 describe("detectLang", () => {
-  it("ekstensi umum", () => {
+  it("common extensions", () => {
     assert.equal(detectLang("src/App.tsx"), "ts");
     assert.equal(detectLang("a.json"), "json");
     assert.equal(detectLang("run.sh"), "sh");
@@ -20,7 +20,7 @@ describe("detectLang", () => {
     assert.equal(detectLang("Makefile"), "sh");
   });
 
-  it("konten: shebang & json & yaml & html", () => {
+  it("content: shebang & json & yaml & html", () => {
     assert.equal(detectLangFromContent("bin/jalan", "#!/usr/bin/env python3\nprint(1)\n"), "py");
     assert.equal(detectLangFromContent("bin/jalan", "#!/bin/bash\necho hi\n"), "sh");
     assert.equal(detectLangFromContent("data", '{"a": 1}'), "json");
@@ -30,14 +30,14 @@ describe("detectLang", () => {
     assert.equal(detectLangFromContent("a.py", "hello"), "py");
   });
 
-  it("stripAnsi buang escape shell", () => {
+  it("stripAnsi removes shell escapes", () => {
     assert.equal(stripAnsi("\x1b[32mok\x1b[0m\n"), "ok\n");
     assert.equal(stripAnsi("plain"), "plain");
   });
 });
 
 describe("highlight ts", () => {
-  it("keyword, string, angka, komentar", () => {
+  it("keywords, strings, numbers, comments", () => {
     const [l1] = highlight("const x = 42; // halo", "ts");
     assert.ok(l1.some((s) => s.text === "const" && s.color === "magenta"));
     assert.ok(l1.some((s) => s.text === "42" && s.color === "yellow"));
@@ -46,14 +46,14 @@ describe("highlight ts", () => {
     assert.ok(s.some((x) => x.text === '"hi"' && x.color === "green"));
   });
 
-  it("tipe kapital jadi cyan", () => {
+  it("capitalized types turn cyan", () => {
     const [l] = highlight("function f(x: string): Promise<void> {}", "ts");
     assert.ok(l.some((s) => s.text === "Promise" && s.color === "cyan"));
   });
 });
 
 describe("highlight diff", () => {
-  it("prefix + hijau, - merah, @@ cyan, konteks dim", () => {
+  it("prefix + green, - red, @@ cyan, dim context", () => {
     const [plus] = highlight("+tambah", "diff");
     assert.equal(plus[0].color, "green");
     const [minus] = highlight("-kurang", "diff");
@@ -66,25 +66,25 @@ describe("highlight diff", () => {
 });
 
 describe("highlight json/md/sh", () => {
-  it("json: kunci hijau, bool magenta", () => {
+  it("json: green keys, magenta bools", () => {
     const [l] = highlight('{"a": true}', "json");
     assert.ok(l.some((s) => s.color === "green"));
     assert.ok(l.some((s) => s.text === "true" && s.color === "magenta"));
   });
 
-  it("md: heading bold + inline code hijau", () => {
+  it("md: bold headings + green inline code", () => {
     const [h] = highlight("# Judul", "md");
     assert.ok(h[0].bold);
     const [b] = highlight("pakai `code` di sini", "md");
     assert.ok(b.some((s) => s.text === "`code`" && s.color === "green"));
   });
 
-  it("sh: komentar abu, keyword sh", () => {
+  it("sh: gray comments, sh keywords", () => {
     const [l] = highlight("# komen", "sh");
     assert.equal(l[0].color, "gray");
   });
 
-  it("py/go/rust: keyword + komentar", () => {
+  it("py/go/rust: keywords + comments", () => {
     const [py] = highlight("def f(): # halo", "py");
     assert.ok(py.some((s) => s.text === "def" && s.color === "magenta"));
     assert.ok(py.some((s) => s.text === "# halo" && s.color === "gray"));
@@ -96,12 +96,12 @@ describe("highlight json/md/sh", () => {
     assert.ok(sql.some((s) => s.text === "select" && s.color === "magenta"));
   });
 
-  it("plain: tanpa warna", () => {
+  it("plain: no colors", () => {
     const [l] = highlight("teks biasa 123", "plain");
     assert.ok(l.every((s) => s.color === undefined));
   });
 
-  it("baris kosong tetap satu segmen", () => {
+  it("empty lines stay one segment", () => {
     assert.deepEqual(highlight("", "ts"), [[{ text: "" }]]);
   });
 });

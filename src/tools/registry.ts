@@ -1,4 +1,4 @@
-// ─── Tool registry — port dari sabana-dev apps/api/src/agents/tools/registry.ts ───
+// ─── Tool registry — ported from sabana-dev apps/api/src/agents/tools/registry.ts ───
 import type { ToolDefinitionForModel } from "../llm/types.js";
 import type { ToolDefinition } from "./types.js";
 

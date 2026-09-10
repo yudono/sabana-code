@@ -23,7 +23,7 @@ function isolatedHome(): string {
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp-echo.mjs");
 
 describe("mcp tool names", () => {
-  it("mapping server/tool ↔ nama tool", () => {
+  it("server/tool ↔ tool name mapping", () => {
     assert.equal(mcpToolName("GitHub", "create_issue"), "mcp__github__create_issue");
     assert.deepEqual(parseMcpToolName("mcp__github__create_issue"), { server: "github", tool: "create_issue" });
     assert.equal(parseMcpToolName("read_file"), null);
@@ -32,12 +32,12 @@ describe("mcp tool names", () => {
 });
 
 describe("mcp config", () => {
-  it("kosong bila belum ada file", () => {
+  it("empty when no file exists yet", () => {
     isolatedHome();
     assert.deepEqual(loadMcpConfig(), { servers: {} });
   });
 
-  it("roundtrip + entri tanpa command dibuang", () => {
+  it("roundtrip + command-less entries dropped", () => {
     isolatedHome();
     saveMcpConfig({ servers: { ok: { command: "npx", args: ["-y", "x"] }, rusak: { command: "  " } } });
     const back = loadMcpConfig();
@@ -47,7 +47,7 @@ describe("mcp config", () => {
 });
 
 describe("mcp manager vs server asli", () => {
-  it("list + call tools via stdio", async () => {
+  it("list + call tools over stdio", async () => {
     isolatedHome();
     saveMcpConfig({ servers: { test: { command: process.execPath, args: [FIXTURE], timeoutMs: 8000 } } });
     const mgr = new McpManager();
@@ -66,7 +66,7 @@ describe("mcp manager vs server asli", () => {
     }
   });
 
-  it("server gagal start → down, tanpa tools", async () => {
+  it("failed server start → down, no tools", async () => {
     isolatedHome();
     saveMcpConfig({ servers: { zonk: { command: "/tidak/ada/bin-xyz", timeoutMs: 3000 } } });
     const mgr = new McpManager();

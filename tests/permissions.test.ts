@@ -3,18 +3,18 @@ import assert from "node:assert/strict";
 import { PermissionEngine, emptyApprovals, permissionKey, type AskerVerdict } from "../src/utils/permissions.js";
 
 describe("permission engine", () => {
-  it("tool safe selalu allow", async () => {
+  it("safe tools always allow", async () => {
     const p = new PermissionEngine(false);
     assert.equal(await p.check("read_file", { path: "a.txt" }, "safe"), "allow");
   });
 
-  it("autoApprove mengizinkan tool moderate tanpa prompt", async () => {
+  it("autoApprove allows moderate tools without prompting", async () => {
     const p = new PermissionEngine(true);
     assert.equal(await p.check("write_file", { path: "a.txt" }, "moderate"), "allow");
     assert.equal(await p.check("shell", {}, "moderate", "echo hi"), "allow");
   });
 
-  it("shell dikelompokkan per perintah dasar", () => {
+  it("shell groups by base command", () => {
     assert.deepEqual(permissionKey("shell", { command: "npm test" }, "npm test"), {
       key: "shell:npm",
       base: "npm",
@@ -52,13 +52,13 @@ describe("permission engine", () => {
     assert.equal(await p3.check("shell", { command: "rm -rf y" }, "moderate", "rm -rf y"), "deny");
   });
 
-  it("cancel (Ctrl+C) ditolak tanpa disimpan", async () => {
+  it("cancel (Ctrl+C) refused without saving", async () => {
     const p = new PermissionEngine(false, { asker: async () => "cancel" as AskerVerdict });
     assert.equal(await p.check("shell", { command: "npm test" }, "moderate", "npm test"), "deny");
     assert.deepEqual(p.getState(), emptyApprovals());
   });
 
-  it("abort saat menunggu → deny", async () => {
+  it("abort while waiting → deny", async () => {
     const p = new PermissionEngine(false, { asker: () => new Promise(() => {}) as Promise<AskerVerdict> });
     const c = new AbortController();
     const pending = p.check("shell", { command: "npm test" }, "moderate", "npm test", c.signal);
@@ -66,7 +66,7 @@ describe("permission engine", () => {
     assert.equal(await pending, "deny");
   });
 
-  it("shell aman (ls/cd) bebas izin tanpa bertanya", async () => {
+  it("safe shell (ls/cd) needs no approval, never asks", async () => {
     let asked = 0;
     const p = new PermissionEngine(false, {
       asker: async () => {
@@ -79,7 +79,7 @@ describe("permission engine", () => {
     assert.equal(asked, 0);
   });
 
-  it("shell berbahaya tetap bertanya (sekali per entity)", async () => {
+  it("dangerous shell still asks (once per entity)", async () => {
     const asked: string[] = [];
     const p = new PermissionEngine(false, {
       asker: async (req) => {
@@ -97,7 +97,7 @@ describe("permission engine", () => {
     assert.deepEqual(asked, ["npm install", "rm -rf x"]);
   });
 
-  it("write/edit file bebas izin (risk safe)", async () => {
+  it("file write/edit needs no approval (risk safe)", async () => {
     let asked = 0;
     const p = new PermissionEngine(false, {
       asker: async () => {

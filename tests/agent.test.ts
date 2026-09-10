@@ -7,12 +7,12 @@ import { SingleAgent } from "../src/agent.js";
 import { SYSTEM_PROMPT, buildInitialContext } from "../src/prompt.js";
 
 describe("prompt", () => {
-  it("system prompt tidak kosong dan menyebut tools inti", () => {
+  it("system prompt non-empty and names core tools", () => {
     assert.ok(SYSTEM_PROMPT.includes("write_file"));
     assert.ok(SYSTEM_PROMPT.includes("web_search"));
   });
 
-  it("konteks awal memuat prompt + workspace", () => {
+  it("initial context holds prompt + workspace", () => {
     const ctx = buildInitialContext("buat x", "/tmp/ws", "a.txt\n");
     assert.ok(ctx.includes("buat x"));
     assert.ok(ctx.includes("/tmp/ws"));
@@ -20,7 +20,7 @@ describe("prompt", () => {
 });
 
 describe("single agent", () => {
-  it("prompt terblokir guardrail berhenti tanpa memanggil LLM", async () => {
+  it("guardrail-blocked prompts stop without calling the LLM", async () => {
     const agent = new SingleAgent({
       model: "x",
       provider: "openai",
@@ -39,7 +39,7 @@ describe("single agent", () => {
     assert.deepEqual(r.filesModified, []);
   });
 
-  it("LLM tak terjangkau gagal rapi tanpa throw", async () => {
+  it("unreachable LLM fails cleanly without throwing", async () => {
     const agent = new SingleAgent({
       model: "x",
       provider: "openai",

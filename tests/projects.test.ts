@@ -19,7 +19,7 @@ function isolatedHome(): string {
 }
 
 describe("projects registry", () => {
-  it("ID stabil untuk path yang sama, beda untuk path lain", () => {
+  it("stable IDs for the same path, different for others", () => {
     isolatedHome();
     const a = mkdtempSync(join(tmpdir(), "proj-a-"));
     assert.equal(projectIdFor(a), projectIdFor(a + "/"));
@@ -27,7 +27,7 @@ describe("projects registry", () => {
     assert.match(projectIdFor(a), /^[0-9a-f]{16}$/);
   });
 
-  it("register membuat info.json + session ter-link ke project", () => {
+  it("register creates info.json + links the session to the project", () => {
     const home = isolatedHome();
     const cwd = mkdtempSync(join(tmpdir(), "myapp-"));
     const info = registerProject(cwd);
@@ -47,7 +47,7 @@ describe("projects registry", () => {
     assert.equal(list[0].sessions, 1);
   });
 
-  it("satu project bisa punya banyak session", () => {
+  it("one project can own many sessions", () => {
     isolatedHome();
     const cwd = mkdtempSync(join(tmpdir(), "multi-"));
     const a = createSession("m", "mock", cwd);
@@ -60,7 +60,7 @@ describe("projects registry", () => {
 });
 
 describe("sub-agents", () => {
-  it("memuat profil dari ~/sabana-code/agents", () => {
+  it("loads profiles from ~/sabana-code/agents", () => {
     const home = isolatedHome();
     mkdirSync(join(home, "agents"), { recursive: true });
     writeFileSync(
@@ -76,7 +76,7 @@ describe("sub-agents", () => {
     assert.equal(loadAgent("tidak-ada"), null);
   });
 
-  it("runSubAgent jalan terisolasi dan mengembalikan teks", async () => {
+  it("runSubAgent runs isolated and returns text", async () => {
     isolatedHome();
     const ws = mkdtempSync(join(tmpdir(), "sc-sub-"));
     setMockPlan([{ name: "write_file", args: { path: "sub.txt", content: "dari-sub" } }]);

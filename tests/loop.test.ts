@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { LoopDetector } from "../src/utils/loop.js";
 
 describe("loop detector", () => {
-  it("mendeteksi tool sama + argumen sama 3x beruntun", () => {
+  it("detects same tool + same args 3x in a row", () => {
     const d = new LoopDetector();
     const args = { path: "a.txt" };
     assert.equal(d.record("read_file", args).detected, false);
@@ -11,14 +11,14 @@ describe("loop detector", () => {
     assert.equal(d.record("read_file", args).detected, true);
   });
 
-  it("tidak false-positive untuk panggilan berbeda", () => {
+  it("no false positives for different calls", () => {
     const d = new LoopDetector();
     for (let i = 0; i < 5; i++) {
       assert.equal(d.record("read_file", { path: `f${i}.txt` }).detected, false);
     }
   });
 
-  it("mendeteksi jendela tanpa write setelah ada write", () => {
+  it("detects write-less windows after a write", () => {
     const d = new LoopDetector();
     d.record("write_file", { path: "a.txt", content: "x" });
     let last = { detected: false };
@@ -28,7 +28,7 @@ describe("loop detector", () => {
     assert.equal(last.detected, true);
   });
 
-  it("resetProgress memberi ruang segar", () => {
+  it("resetProgress gives fresh room", () => {
     const d = new LoopDetector();
     d.record("write_file", { path: "a.txt", content: "x" });
     for (let i = 0; i < 12; i++) d.record("read_file", { path: `f${i}.txt` });
@@ -36,7 +36,7 @@ describe("loop detector", () => {
     assert.equal(d.record("read_file", { path: "z.txt" }).detected, false);
   });
 
-  it("mendeteksi error sama berulang", () => {
+  it("detects repeating identical errors", () => {
     const d = new LoopDetector();
     assert.equal(d.recordError("boom 123").detected, false);
     assert.equal(d.recordError("boom 456").detected, false);

@@ -23,18 +23,18 @@ function bigHistory(n = 12): ModelMessage[] {
 }
 
 describe("compact", () => {
-  it("ambang auto-compact 80%", () => {
+  it("auto-compact threshold 80%", () => {
     assert.equal(AUTO_COMPACT_PCT, 80);
   });
 
-  it("buildCompactPrompt memuat transkrip + instruksi", () => {
+  it("buildCompactPrompt holds transcript + instructions", () => {
     const p = buildCompactPrompt(bigHistory(4));
     assert.ok(p.includes("pertanyaan 0"));
-    assert.ok(p.includes("RIWAYAT"));
+    assert.ok(p.includes("HISTORY"));
     assert.ok(p.length <= 14_000 + 500);
   });
 
-  it("applyCompactSummary: system + ringkasan + ekor", () => {
+  it("applyCompactSummary: system + summary + tail", () => {
     const h = bigHistory(10);
     const { messages, dropped } = applyCompactSummary(h, "RINGKASAN");
     assert.equal(messages[0].role, "system");
@@ -46,7 +46,7 @@ describe("compact", () => {
     assert.ok(messages[messages.length - 1].content.includes("jawaban 9"));
   });
 
-  it("applyCompactSummary membuang tool yatim", () => {
+  it("applyCompactSummary drops orphan tools", () => {
     const h: ModelMessage[] = [
       msg("system", "sys"),
       ...Array.from({ length: 10 }, (_, i) => msg("user", `u${i}`)),
@@ -66,7 +66,7 @@ describe("compact", () => {
     }
   });
 
-  it("compactHistory menolak riwayat pendek", async () => {
+  it("compactHistory rejects short history", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-compact-"));
     const agent = new SingleAgent({
       model: "mock", provider: "mock", apiKey: "mock", baseUrl: "",
@@ -74,10 +74,10 @@ describe("compact", () => {
     });
     const r = await agent.compactHistory([msg("system", "s"), msg("user", "hi")]);
     assert.equal(r.ok, false);
-    assert.match(r.error || "", /pendek/);
+    assert.match(r.error || "", /short/);
   });
 
-  it("compactHistory memakai ringkasan LLM (mock)", async () => {
+  it("compactHistory uses an LLM summary (mock)", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-compact-"));
     const agent = new SingleAgent({
       model: "mock", provider: "mock", apiKey: "mock", baseUrl: "",
@@ -95,7 +95,7 @@ describe("compact", () => {
     assert.ok(r.messages[1].content.includes(r.summary));
   });
 
-  it("auto-compact menyala di atas 80% (mock, event compacted)", async () => {
+  it("auto-compact fires past 80% (mock, compacted event)", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-compact-"));
     const events: string[] = [];
     const agent = new SingleAgent({
@@ -120,7 +120,7 @@ describe("compact isolation", () => {
     process.env.SABANA_HOME = mkdtempSync(join(tmpdir(), "sc-compact-home-"));
   });
 
-  it("tidak memakai settings global saat compact", () => {
+  it("ignores global settings during compact", () => {
     // hanya memastikan test ini jalan dengan HOME terisolasi
     assert.ok((process.env.SABANA_HOME || "").includes("sc-compact-home-"));
   });

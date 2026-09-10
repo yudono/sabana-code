@@ -1,6 +1,6 @@
 // ─── Setup wizard + inisialisasi ~/sabana-code/ saat pertama jalan ───
 // Alur: install → buka sabana-code → folder ~/sabana-code/ dibuat
-// (sessions/, logs/, settings.json, sabana.db) → user setup provider utama
+// (sessions/, logs/, settings.json, sabana.db) → user sets up the main provider
 // (openai/anthropic/google/ollama/custom) + API key + model → siap dipakai.
 import * as readline from "node:readline";
 import { getDb } from "./db.js";
@@ -36,12 +36,12 @@ function askHidden(rl: readline.Interface, q: string): Promise<string> {
   });
 }
 
-/** Wizard interaktif: pilih provider → URL → key → model → (opsional) Tavily. */
+/** Interactive wizard: provider → URL → key → model → (optional) Tavily. */
 export async function runSetupWizard(): Promise<SettingsFile> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const names = SUPPORTED_PROVIDERS.filter((p) => p !== "mock");
   try {
-    process.stdout.write("\n=== sabana-code setup ===\nPilih provider utama:\n");
+    process.stdout.write("\n=== sabana-code setup ===\nPick the main provider:\n");
     names.forEach((p, i) => {
       process.stdout.write(`  [${i + 1}] ${p} — ${PROVIDER_PRESETS[p].hint}\n`);
     });
@@ -53,7 +53,7 @@ export async function runSetupWizard(): Promise<SettingsFile> {
         const idx = parseInt(ans, 10);
         if (!isNaN(idx) && idx >= 1 && idx <= names.length) provider = names[idx - 1];
         else if (names.includes(ans.toLowerCase())) provider = ans.toLowerCase();
-        else process.stdout.write("  Pilihan tidak valid.\n");
+        else process.stdout.write("  Invalid choice.\n");
       }
     }
     const preset = PROVIDER_PRESETS[provider];
@@ -61,7 +61,7 @@ export async function runSetupWizard(): Promise<SettingsFile> {
     let baseUrl = preset.baseUrl;
     if (provider === "custom") {
       while (!baseUrl) {
-        baseUrl = await ask(rl, "Base URL OpenAI-compatible (mis. https://providerkamu.com/v1): ");
+        baseUrl = await ask(rl, "OpenAI-compatible base URL (e.g. https://your-provider.com/v1): ");
       }
     } else {
       const custom = await ask(rl, `Base URL [default: ${preset.baseUrl}]: `);
@@ -71,15 +71,15 @@ export async function runSetupWizard(): Promise<SettingsFile> {
     let apiKey = "";
     if (preset.needsKey) {
       while (!apiKey) {
-        apiKey = await askHidden(rl, "API key (input disembunyikan): ");
-        if (!apiKey) process.stdout.write("  API key wajib diisi.\n");
+        apiKey = await askHidden(rl, "API key (hidden input): ");
+        if (!apiKey) process.stdout.write("  API key is required.\n");
       }
     }
 
     const modelAns = await ask(rl, `Model [default: ${preset.model || "-"}]: `);
     const model = modelAns || preset.model;
 
-    const tavily = await ask(rl, "Tavily API key untuk web_search (opsional, Enter lewati): ");
+    const tavily = await ask(rl, "Tavily API key for web_search (optional, Enter to skip): ");
 
     const s = loadSettings();
     s.default_provider = provider;
@@ -93,7 +93,7 @@ export async function runSetupWizard(): Promise<SettingsFile> {
     if (tavily) s.tavily_api_key = tavily;
     saveSettings(s);
     flog("setup", `provider=${provider} model=${model}`);
-    process.stdout.write(`\n✓ Tersimpan di ${settingsPath()}\n`);
+    process.stdout.write(`\n✓ Saved to ${settingsPath()}\n`);
     process.stdout.write(`  Provider: ${provider}\n  Model:    ${model || "(default provider)"}\n`);
     return s;
   } finally {
@@ -102,24 +102,24 @@ export async function runSetupWizard(): Promise<SettingsFile> {
 }
 
 /**
- * Inisialisasi lengkap saat aplikasi dibuka:
- * 1. Buat ~/sabana-code/ (sessions/, logs/, sabana.db via getDb()).
- * 2. Buat settings.json default bila belum ada.
- * 3. Bila setup belum lengkap → wizard (TTY) atau error ramah (non-TTY).
+ * Full init when the app opens:
+ * 1. Create ~/sabana-code/ (sessions/, logs/, sabana.db via getDb()).
+ * 2. Create default settings.json if missing.
+ * 3. If setup is incomplete → wizard (TTY) or friendly error (non-TTY).
  */
 export async function ensureInitialized(): Promise<SettingsFile> {
   ensureHome();
   getDb(); // pastikan sabana.db + tabel ada
-  ensureMcpConfigSeed(); // buat ~/sabana-code/mcp.json contoh bila belum ada
+  ensureMcpConfigSeed(); // create sample ~/sabana-code/mcp.json if missing
   let s = loadSettings();
   if (!isSettingsComplete(s)) {
     if (!process.stdin.isTTY) {
       throw new Error(
-        `Setup belum lengkap (${settingsPath()}). Jalankan 'sabana-code setup' di terminal interaktif.`,
+        `Setup incomplete (${settingsPath()}). Run 'sabana-code setup' in an interactive terminal.`,
       );
     }
-    process.stdout.write(`\nSelamat datang di sabana-code! Home: ${sabanaHome()}\n`);
-    process.stdout.write("Setup awal dulu — pilih provider LLM utama kamu.\n");
+    process.stdout.write(`\nWelcome to sabana-code! Home: ${sabanaHome()}\n`);
+    process.stdout.write("First-time setup — pick your main LLM provider.\n");
     s = await runSetupWizard();
   }
   return s;

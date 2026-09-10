@@ -1,5 +1,5 @@
-// Saat TUI fullscreen aktif, tulisan langsung ke stderr akan menabrak render Ink
-// (teks lama tidak terhapus → tampilan menumpuk). Aktifkan quiet sebelum render.
+// While the fullscreen TUI is active, direct stderr writes collide with the Ink render
+// (old text never clears → the display piles up). Enable quiet before rendering.
 let quiet = false;
 
 export function setQuiet(v: boolean): void {

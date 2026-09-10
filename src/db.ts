@@ -1,6 +1,6 @@
-// ─── sqlite global (node:sqlite bawaan, tanpa dependensi) ───
-// Tabel: sessions (index cepat), usage (jejak token).
-// (Kredensial tinggal di settings.json, bukan di sini.)
+// ─── Global sqlite (built-in node:sqlite, zero dependencies) ───
+// Tables: sessions (fast index), usage (token trail).
+// (Credentials live in settings.json, not here.)
 import { DatabaseSync } from "node:sqlite";
 import { dbPath, ensureHome } from "./home.js";
 
@@ -44,18 +44,18 @@ export function getDb(): DatabaseSync {
       );
       DROP TABLE IF EXISTS credentials;
     `);
-    // Migrasi: kolom project_id untuk db lama
+    // Migration: project_id column for old dbs
     try {
       db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT DEFAULT ''`);
     } catch {
-      /* sudah ada */
+      /* already exists */
     }
     dbs.set(path, db);
   }
   return db;
 }
 
-/** Tutup koneksi (dipakai tests agar file db bisa dibersihkan). */
+/** Close the connection (lets tests clean up the db file). */
 export function closeDb(): void {
   for (const [, db] of dbs) {
     try {

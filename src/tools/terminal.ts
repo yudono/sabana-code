@@ -1,7 +1,7 @@
-// ─── Terminal tool — port dari sabana-dev tools/built-in/tools.ts (shell) ───
-// Dieksekusi lewat sabana-sandbox (src/sabana-sandbox.ts): filter ganda —
-// izin user (y/a/n) + kebijakan statis + kurungan workspace. `rm -rf /`,
-// sudo, curl|sh, dan path keluar workspace SELALU diblokir (tak bisa di-approve).
+// ─── Terminal tool — ported from sabana-dev tools/built-in/tools.ts (shell) ───
+// Runs through sabana-sandbox (src/sabana-sandbox.ts): double filter —
+// user approval (y/a/n) + static policy + workspace jail. `rm -rf /`,
+// sudo, curl|sh, and out-of-workspace paths are ALWAYS blocked (cannot be approved).
 import type { ToolDefinition } from "./types.js";
 import { safePath } from "./sandbox.js";
 import { runSandboxed } from "../sabana-sandbox.js";
@@ -38,7 +38,7 @@ export function shellHandler(workspaceDir: string) {
       return {
         error:
           `SANDBOX BLOCKED: ${r.blocked}\n` +
-          `Perintah tidak dieksekusi sama sekali dan tak bisa di-approve. Tulis ulang agar di dalam workspace (${workspaceDir}).`,
+          `The command was not executed at all and cannot be approved. Rewrite it to stay inside the workspace (${workspaceDir}).`,
         blocked: true,
       };
     }

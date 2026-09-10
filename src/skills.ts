@@ -1,10 +1,10 @@
-// ─── Skills: instruksi kerja reusable ala Claude Code / OpenCode ───
+// ─── Skills: reusable work instructions ───
 // Sumber (prioritas rendah → tinggi):
-//   1. <pkg>/skills/*.md + ~/sabana-code/skills/*.md  (global, di-seed dari template)
-//   2. <workspace>/.sabana/skills/*.md                (per project, menang bila nama sama)
+//   1. <pkg>/skills/*.md + ~/sabana-code/skills/*.md  (global, seeded from templates)
+//   2. <workspace>/.sabana/skills/*.md                (per project, wins on name clash)
 // Format = markdown + frontmatter (name, description). Dipakai dua cara:
-//   - Disuntik ke konteks awal sebagai daftar (agent tahu kapan memakai).
-//   - Tool `skill` memuat isi penuh satu skill saat dibutuhkan (hemat konteks).
+//   - Injected into the initial context as a list (agent knows when to use).
+//   - Tool `skill` loads one full skill on demand (saves context).
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { skillsDir } from "./home.js";
@@ -45,19 +45,19 @@ function readDir(dir: string, scope: SkillProfile["scope"]): SkillProfile[] {
       if (!name) continue;
       out.push({
         name,
-        description: meta.description || "(tanpa deskripsi)",
+        description: meta.description || "(no description)",
         instructions: body,
         file: f,
         scope,
       });
     } catch {
-      /* lewati file rusak */
+      /* skip corrupt files */
     }
   }
   return out;
 }
 
-/** Semua skill: project menimpa global bila nama sama. */
+/** All skills: project overrides global on name clash. */
 export function listSkills(workspaceDir?: string): SkillProfile[] {
   const byName = new Map<string, SkillProfile>();
   for (const s of readDir(skillsDir(), "global")) byName.set(s.name, s);
@@ -74,27 +74,27 @@ export function loadSkill(name: string, workspaceDir?: string): SkillProfile | n
   return listSkills(workspaceDir).find((s) => s.name === lower) || null;
 }
 
-/** Blok ringkas untuk konteks awal: daftar skill + cara pakai. Kosong bila tak ada skill. */
+/** Concise block for the initial context: skill list + usage. Empty when no skills exist. */
 export function buildSkillsContext(workspaceDir?: string): string {
   const skills = listSkills(workspaceDir);
   if (skills.length === 0) return "";
   const lines = skills.map((s) => `- ${s.name}: ${s.description}`);
   return [
     "## SKILLS (instruksi kerja siap pakai)",
-    "Skill berikut tersedia. Bila tugas user cocok dengan salah satunya, panggil tool `skill` dengan nama itu DULU, ikuti instruksinya, lalu lanjutkan.",
+    "The following skills are available. When the user task matches one, call the `skill` tool with that name FIRST, follow its instructions, then continue.",
     ...lines,
   ].join("\n");
 }
 
-// ─── Tool `skill`: muat isi penuh satu skill ───
+// ─── The `skill` tool: load one full skill ───
 export const skillTool: ToolDefinition = {
   name: "skill",
   description:
-    "Muat instruksi penuh satu skill (lihat daftar via konteks SKILLS). Pakai sebelum mengerjakan tugas yang cocok (mis. skill=commit sebelum menulis commit message).",
+    "Load the full instructions of one skill (see the list in the SKILLS context). Use before working on a matching task (e.g. skill=commit before writing a commit message).",
   inputSchema: {
     type: "object",
     properties: {
-      name: { type: "string", description: "Nama skill (mis. commit, review-pr)" },
+      name: { type: "string", description: "Skill name (e.g. commit, review-pr)" },
     },
     required: ["name"],
   },
@@ -107,12 +107,12 @@ export function skillHandler(workspaceDir: string) {
   return async (args: Record<string, unknown>) => {
     const name = String(args.name || "").toLowerCase();
     if (!name) return { error: "Missing required field: name" };
-    // Batasi ke nama file aman (huruf/angka/dash/underscore).
+    // Restrict to safe file names (letters/digits/dash/underscore).
     if (!/^[a-z0-9_-]+$/.test(name)) return { error: `Invalid skill name: ${name}` };
     const s = loadSkill(name, workspaceDir);
     if (!s) {
-      const avail = listSkills(workspaceDir).map((x) => x.name).join(", ") || "(belum ada skill)";
-      return { error: `Skill '${name}' tidak ada. Tersedia: ${avail}` };
+      const avail = listSkills(workspaceDir).map((x) => x.name).join(", ") || "(no skills yet)";
+      return { error: `Skill '${name}' not found. Available: ${avail}` };
     }
     return { name: s.name, description: s.description, scope: s.scope, instructions: s.instructions };
   };

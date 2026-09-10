@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // sabana-code — TUI coding agent fullscreen (satu-satunya runnable).
-// Dijalankan dari direktori mana pun; session, log, db sqlite, dan
-// credentials tersimpan di ~/sabana-code/.
+// Runs from any directory; sessions, logs, sqlite db, and
+// credentials live in ~/sabana-code/.
 import * as readline from "node:readline";
 import { credentialSummary, removeCredential, saveCredential } from "./auth.js";
 import { ensureHome, sabanaHome } from "./home.js";
@@ -10,29 +10,50 @@ import { runSetupWizard } from "./setup.js";
 import { launchTui, parseTuiArgs } from "./tui/launch.js";
 import { err, ok } from "./utils/logger.js";
 import { flog } from "./utils/filelog.js";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Package version (for `sabana-code --version`, build diagnosis). */
+export function packageVersion(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here, "..", "package.json"), join(process.cwd(), "package.json")];
+  for (const p of candidates) {
+    try {
+      if (existsSync(p)) {
+        const v = (JSON.parse(readFileSync(p, "utf-8")) as { version?: unknown }).version;
+        if (typeof v === "string" && v) return v;
+      }
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return "unknown";
+}
 
 function help(): void {
   process.stderr.write(`
-sabana-code — TUI coding agent (fullscreen)
+sabana-code — fullscreen TUI coding agent
 
 Usage:
-  sabana-code ["prompt awal"] [options]
-  sabana-code setup                    Setup awal / ulang provider utama
-  sabana-code auth login <provider>    Simpan API key ke ~/sabana-code/ (global)
-  sabana-code auth logout <provider>   Hapus API key tersimpan
-  sabana-code auth list                Lihat status kredensial
+  sabana-code ["initial prompt"] [options]
+  sabana-code setup                    Initial / repeat main provider setup
+  sabana-code auth login <provider>    Save API key to ~/sabana-code/ (global)
+  sabana-code auth logout <provider>   Remove stored API key
+  sabana-code auth list                Show credential status
 
 Options:
   -C, --workspace <path>   Workspace dir (default: cwd)
-  --model <name>            Model (default dari setup)
+  --model <name>            Model (default from setup)
   --provider <name>         openai | anthropic | google | groq | together | openrouter | perplexity | ollama | custom | mock
-  --max-steps <n>           Maks step per turn (default: 40)
-  --resume, -r <id>        Lanjutkan session (dukung prefix)
-  --continue               Lanjutkan session terakhir
-  -h, --help                Bantuan ini
+  --max-steps <n>           Max steps per turn (default: 40)
+  --resume, -r <id>        Resume a session (prefix ok)
+  --continue               Resume the last session
+  -h, --help               This help
+  -V, --version            Print version
 
-Setup pertama membuat ~/sabana-code/ (sessions/, logs/, settings.json, sabana.db)
-lalu meminta provider utama + API key + model. Tanpa .env.
+First setup creates ~/sabana-code/ (sessions/, logs/, settings.json, sabana.db)
+then asks for main provider + API key + model. No .env.
 `);
 }
 
@@ -75,19 +96,19 @@ async function authCmd(args: string[]): Promise<void> {
     process.exit(1);
   }
   if (action === "login") {
-    const key = await askHidden(`API key untuk ${provider} (input disembunyikan): `);
+    const key = await askHidden(`API key for ${provider} (hidden input): `);
     if (!key) {
-      err("Key kosong — dibatalkan.");
+      err("Empty key — cancelled.");
       process.exit(1);
     }
     saveCredential(provider, key);
-    ok(`Tersimpan di ${sabanaHome()} (settings.json). Kini bisa jalan dari mana pun.`);
+    ok(`Saved in ${sabanaHome()} (settings.json). Works from anywhere now.`);
     flog("auth", `login ${provider}`);
   } else if (action === "logout") {
-    if (removeCredential(provider)) ok(`Kredensial ${provider} dihapus.`);
-    else err(`Tidak ada kredensial ${provider} yang tersimpan.`);
+    if (removeCredential(provider)) ok(`Credential for ${provider} removed.`);
+    else err(`No stored credential for ${provider}.`);
   } else {
-    err("Aksi: login | logout | list");
+    err("Action: login | logout | list");
     process.exit(1);
   }
 }
@@ -96,6 +117,10 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes("-h") || argv.includes("--help")) {
     help();
+    process.exit(0);
+  }
+  if (argv.includes("-V") || argv.includes("--version")) {
+    process.stdout.write(`sabana-code ${packageVersion()}\n`);
     process.exit(0);
   }
   if (argv[0] === "auth") {

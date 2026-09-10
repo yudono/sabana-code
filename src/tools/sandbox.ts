@@ -1,7 +1,7 @@
-// ─── Sandbox path guard — port langsung dari sabana-dev apps/api/src/agents/tools/sandbox.ts ───
+// ─── Sandbox path guard — direct port from sabana-dev apps/api/src/agents/tools/sandbox.ts ───
 import { isAbsolute, relative, resolve } from "node:path";
 
-/** Resolve path user relatif ke workspaceDir, tolak bila keluar sandbox. */
+/** Resolve a user path relative to workspaceDir, reject when escaping the sandbox. */
 export function safePath(workspaceDir: string, userPath: string): string | null {
   const stripped = userPath.replace(/^sandbox[\\/]/, "").replace(/^sandbox$/, "");
   const abs = isAbsolute(stripped) ? resolve(stripped) : resolve(workspaceDir, stripped);

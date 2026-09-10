@@ -1,8 +1,8 @@
-// ─── Global home ala opencode/claude-code: ~/sabana-code/ ───
-//   sessions/  → tiap session/prompt tersimpan di sini (JSON: history + context)
-//   logs/      → log aktivitas harian
-//   sabana.db  → sqlite: index session, credentials, usage
-// Bisa di-override via $SABANA_HOME (dipakai tests).
+// ─── Global home à la opencode/claude-code: ~/sabana-code/ ───
+//   sessions/  → every session/prompt stored here (JSON: history + context)
+//   logs/      → daily activity logs
+//   sabana.db  → sqlite: session index, credentials, usage
+// Overridable via $SABANA_HOME (used by tests).
 import { existsSync, mkdirSync, readdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -48,10 +48,10 @@ export function dbPath(): string {
   return join(sabanaHome(), "sabana.db");
 }
 
-/** Salin template profil agents bawaan ke home (tanpa menimpa kustom user). */
+/** Copy built-in agent profile templates into home (never overwrite user customizations). */
 function seedDirTemplates(pkgSubdir: string, destDir: string): void {
   try {
-    // Lokasi template: <pkg>/agents atau <pkg>/skills (dist/.. atau src/..), fallback cwd (dev).
+    // Template location: <pkg>/agents or <pkg>/skills (dist/.. or src/..), cwd fallback (dev).
     const here = dirname(fileURLToPath(import.meta.url));
     const candidates = [join(here, "..", pkgSubdir), join(process.cwd(), pkgSubdir)];
     for (const src of candidates) {
@@ -79,7 +79,7 @@ export function ensureHome(): string {
   seedDirTemplates("agents", agentsDir());
   seedDirTemplates("skills", skillsDir());
 
-  // Migrasi sekali dari ~/.sabana-code/sessions (versi TUI awal)
+  // One-time migration from ~/.sabana-code/sessions (early TUI version)
   const marker = join(home, ".migrated");
   if (!existsSync(marker)) {
     try {
@@ -93,12 +93,12 @@ export function ensureHome(): string {
         }
       }
     } catch {
-      /* migrasi best-effort */
+      /* best-effort migration */
     }
     try {
       writeFileSync(marker, new Date().toISOString());
     } catch {
-      /* abaikan */
+      /* ignore */
     }
   }
   return home;

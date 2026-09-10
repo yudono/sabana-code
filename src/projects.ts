@@ -1,7 +1,7 @@
-// ─── projects/ : riwayat sesi dikelompokkan per folder proyek ───
-// Buka terminal di folder mana pun → project terdeteksi dari cwd (hash path).
-// Satu project bisa punya banyak session. sessions/ menyimpan isi session,
-// projects/ menyimpan metadata project — berkaitan tapi hal berbeda.
+// ─── projects/: session history grouped per project folder ───
+// Open a terminal anywhere → the project is detected from cwd (path hash).
+// One project can own many sessions. sessions/ holds session contents,
+// projects/ holds project metadata — related but different things.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
@@ -16,7 +16,7 @@ export interface ProjectInfo {
   updatedAt: string;
 }
 
-/** ID stabil dari path absolut (tetap sama walau dibuka kapan pun). */
+/** Stable ID from the absolute path (same no matter when opened). */
 export function projectIdFor(cwd: string): string {
   return createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 16);
 }
@@ -25,7 +25,7 @@ function infoPath(id: string): string {
   return `${projectsDir()}/${id}/info.json`;
 }
 
-/** Daftarkan / sentuh project saat session dibuka di cwd tersebut. */
+/** Register / touch a project when a session opens in that cwd. */
 export function registerProject(cwd: string): ProjectInfo {
   ensureHome();
   const path = resolve(cwd);
@@ -60,7 +60,7 @@ export interface ProjectSummary extends ProjectInfo {
   lastActive: string;
 }
 
-/** Daftar project + hitung session per project (dari index sqlite). */
+/** List projects + count sessions per project (from the sqlite index). */
 export function listProjects(): ProjectSummary[] {
   ensureHome();
   let dirs: string[] = [];
@@ -86,13 +86,13 @@ export function listProjects(): ProjectSummary[] {
       const info = JSON.parse(readFileSync(infoPath(id), "utf-8")) as ProjectInfo;
       out.push({ ...info, sessions: counts.get(id) || 0, lastActive: info.updatedAt });
     } catch {
-      /* lewati */
+      /* skip */
     }
   }
   return out.sort((a, b) => (a.lastActive < b.lastActive ? 1 : -1));
 }
 
-/** Session-session milik satu project (terbaru dulu). */
+/** Sessions owned by one project (newest first). */
 export function projectSessions(projectId: string, limit = 20): Array<{ id: string; title: string; updatedAt: string }> {
   try {
     const rows = getDb()

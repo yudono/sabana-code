@@ -1,4 +1,4 @@
-// ─── LLM types — diadaptasi dari sabana-dev apps/api/src/agents/core/types.ts ───
+// ─── LLM types — adapted from sabana-dev apps/api/src/agents/core/types.ts ───
 
 export type ModelEvent =
   | { type: "text_delta"; text: string }

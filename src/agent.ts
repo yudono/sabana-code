@@ -1,8 +1,8 @@
-// ─── Single-agent loop — disederhanakan dari sabana-dev apps/api/src/agents/core/orchestrator.ts ───
-// SATU agent + tool-calling loop (seperti claude-code / opencode):
-//   LLM decides → tools execute → hasil tools masuk konteks → ulangi sampai selesai.
-// Mendukung multi-turn dalam satu session (chatTurn) + event stream untuk TUI,
-// dan trim konteks mengikuti context-window model yang dipakai.
+// ─── Single-agent loop — simplified from sabana-dev apps/api/src/agents/core/orchestrator.ts ───
+// ONE agent + tool-calling loop (like claude-code / opencode):
+//   LLM decides → tools execute → tool results enter context → repeat until done.
+// Supports multi-turn in one session (chatTurn) + event stream for the TUI,
+// and trims context to the model's context window.
 import type { ModelMessage } from "./llm/types.js";
 import { createProvider, type LLMProvider } from "./llm/provider.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -48,9 +48,13 @@ export interface AgentConfig {
   maxTokens: number;
   maxSteps: number;
   autoApprove: boolean;
-  /** Batas request LLM per menit (default 60; <=0 = tanpa batas). */
+  /** LLM requests-per-minute cap (default 60; <=0 = unlimited). */
   rpm?: number;
-  /** Keputusan izin awal (dari session tersimpan) + penanya izin interaktif. */
+  /** Per-LLM-call timeout in ms (default 120_000). Hung providers fail fast. */
+  llmTimeoutMs?: number;
+  /** Injected provider (tests); defaults to createProvider(config.provider, …). */
+  providerImpl?: LLMProvider;
+  /** Initial permission decisions (from a saved session) + interactive asker. */
   approvals?: ApprovalState;
   askPermission?: PermissionAsker;
   onEvent?: AgentEventHandler;
@@ -86,7 +90,7 @@ export type AgentEvent =
 
 export type AgentEventHandler = (ev: AgentEvent) => void;
 
-/** Handler default: perilaku CLI lama (tulis ke stdout/stderr). */
+/** Default handler: legacy CLI behavior (write to stdout/stderr). */
 function defaultHandler(ev: AgentEvent): void {
   switch (ev.type) {
     case "step":
@@ -111,13 +115,13 @@ function defaultHandler(ev: AgentEvent): void {
       err(ev.message);
       break;
     case "done":
-      ok(`selesai dalam ${ev.steps} step, ${ev.files} file diubah.`);
+      ok(`done in ${ev.steps} steps, ${ev.files} files changed.`);
       break;
     case "trimmed":
-      warn(`Konteks dipangkas (${ev.count} pesan lama dibuang) agar muat di window model.`);
+      warn(`Context trimmed (${ev.count} old messages dropped) to fit the model window.`);
       break;
     case "compacted":
-      ok(`Konteks dipadatkan otomatis (${ev.dropped} pesan → ringkasan).`);
+      ok(`Context auto-compacted (${ev.dropped} messages → summary).`);
       break;
   }
 }
@@ -137,13 +141,15 @@ export class SingleAgent {
   private mcpLoaded = false;
 
   constructor(private config: AgentConfig) {
-    this.provider = createProvider(config.provider, {
-      name: config.provider,
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      model: config.model,
-      maxTokens: config.maxTokens,
-    });
+    this.provider =
+      config.providerImpl ??
+      createProvider(config.provider, {
+        name: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        maxTokens: config.maxTokens,
+      });
     this.emit = config.onEvent || defaultHandler;
     this.limiter = new RateLimiter(config.rpm ?? 60);
     this.permissions = new PermissionEngine(config.autoApprove, {
@@ -170,13 +176,13 @@ export class SingleAgent {
     }
   }
 
-  /** Daftarkan tool dinamis (MCP). Idempoten per nama. */
+  /** Register a dynamic tool (MCP). Idempotent per name. */
   registerDynamicTool(def: ToolDefinition, handler: ToolHandler): void {
     this.registry.register(def);
     this.executor.registerHandler(def.name, handler);
   }
 
-  /** Muat tools MCP (sekali per instance). Gagal → warn, agent tetap jalan. */
+  /** Load MCP tools (once per instance). Failure → warn, agent keeps going. */
   async ensureMcpLoaded(): Promise<void> {
     if (this.mcpLoaded) return;
     this.mcpLoaded = true;
@@ -193,11 +199,32 @@ export class SingleAgent {
     }
   }
 
-  /** Status server MCP (untuk /mcp di TUI). */
+  /** MCP server status (for /mcp in the TUI). */
   mcpStatus() {
     return this.mcp.status();
   }
 
+  /** Per-LLM-call signal: user abort + call timeout. Caller must run cleanup(). */
+  private withLlmTimeout(): { signal: AbortSignal; cleanup: () => void } {
+    const ms = this.config.llmTimeoutMs ?? 120_000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => {
+      ctrl.abort(new DOMException(`LLM request timed out after ${ms}ms`, "TimeoutError"));
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      if (!ctrl.signal.aborted) ctrl.abort(this.abort.signal.reason);
+    };
+    if (this.abort.signal.aborted) onAbort();
+    else this.abort.signal.addEventListener("abort", onAbort, { once: true });
+    return {
+      signal: ctrl.signal,
+      cleanup: () => {
+        clearTimeout(timer);
+        this.abort.signal.removeEventListener("abort", onAbort);
+      },
+    };
+  }
   async reloadMcp(): Promise<{ added: number; errors: string[] }> {
     const { tools, errors } = await this.mcp.reload();
     for (const def of tools) {
@@ -207,7 +234,7 @@ export class SingleAgent {
     return { added: tools.length, errors };
   }
 
-  /** Ganti model/provider mid-session (bikin provider baru, riwayat tetap). */
+  /** Switch model/provider mid-session (new provider, history kept). */
   setModelProvider(model: string, provider: string, apiKey: string, baseUrl: string): void {
     this.config.model = model;
     this.config.provider = provider;
@@ -226,14 +253,14 @@ export class SingleAgent {
     this.abort.abort();
   }
 
-  /** Daftar tools untuk perintah /tools di TUI. */
+  /** Tool list for the /tools command in the TUI. */
   listTools(): Array<{ name: string; description: string }> {
     return this.registry.getAll().map((t) => ({ name: t.name, description: t.description }));
   }
 
   /**
-   * Padatkan riwayat via LLM: pesan lama → satu ringkasan, N pesan terakhir dipertahankan.
-   * Dipakai manual (/compact) dan otomatis saat >80% window.
+   * Compact history via LLM: old messages → one summary, last N messages kept intact.
+   * Used manually (/compact) and automatically past 80% window.
    */
   async compactHistory(messages: ModelMessage[]): Promise<{
     ok: boolean;
@@ -243,15 +270,16 @@ export class SingleAgent {
     error?: string;
   }> {
     if (messages.length <= 4) {
-      return { ok: false, messages, summary: "", dropped: 0, error: "Riwayat terlalu pendek untuk dipadatkan." };
+      return { ok: false, messages, summary: "", dropped: 0, error: "History too short to compact." };
     }
     let summary = "";
+    const { signal, cleanup } = this.withLlmTimeout();
     try {
       for await (const ev of this.provider.generate({
         model: this.config.model,
         messages: [{ role: "user", content: buildCompactPrompt(messages) }],
         maxTokens: Math.min(2048, this.config.maxTokens),
-        signal: this.abort.signal,
+        signal,
       })) {
         if (ev.type === "text_delta") summary += ev.text;
         else if (ev.type === "error") {
@@ -260,21 +288,23 @@ export class SingleAgent {
       }
     } catch (e) {
       return { ok: false, messages, summary: "", dropped: 0, error: (e as Error).message };
+    } finally {
+      cleanup();
     }
     summary = summary.trim();
     if (!summary) {
-      return { ok: false, messages, summary: "", dropped: 0, error: "Ringkasan kosong." };
+      return { ok: false, messages, summary: "", dropped: 0, error: "Empty summary." };
     }
     const applied = applyCompactSummary(messages, summary);
     return { ok: true, messages: applied.messages, summary, dropped: applied.dropped };
   }
 
-  /** Keputusan izin saat ini (untuk disimpan ke session). */
+  /** Current permission decisions (saved into the session). */
   getApprovals(): ApprovalState {
     return this.permissions.getState();
   }
 
-  /** Gabungkan keputusan izin (mis. dari sub-agent) ke engine ini. */
+  /** Merge permission decisions (e.g. from a sub-agent) into this engine. */
   mergeApprovals(s: ApprovalState): void {
     const cur = this.permissions.getState();
     this.permissions.setState({
@@ -283,15 +313,15 @@ export class SingleAgent {
     });
   }
 
-  /** One-shot (dipakai CLI klasik + benchmark): session baru sekali jalan. */
+  /** One-shot (used by classic CLI + benchmark): brand-new session, single run. */
   async run(userPrompt: string, workspaceDir: string): Promise<AgentResult> {
     const { result } = await this.chatTurn(userPrompt, workspaceDir, []);
     return result;
   }
 
   /**
-   * Satu turn dalam session panjang. history = pesan LLM sejauh ini
-   * (diawali system message). Mengembalikan history terbaru + hasil turn.
+   * One turn in a long session. history = LLM messages so far
+   * (starting with the system message). Returns the newest history + turn result.
    */
   async chatTurn(
     userPrompt: string,
@@ -311,7 +341,7 @@ export class SingleAgent {
 
     this.abort = new AbortController();
 
-    // Handlers terikat workspace (sandbox) — pola sabana-dev registerHandlers()
+    // Workspace-bound handlers (sandbox) — sabana-dev registerHandlers() pattern
     this.executor.registerHandler("read_file", readFileHandler(workspaceDir));
     this.executor.registerHandler("write_file", writeFileHandler(workspaceDir));
     this.executor.registerHandler("modified_file", modifiedFileHandler(workspaceDir));
@@ -326,7 +356,7 @@ export class SingleAgent {
     this.executor.registerHandler("todo_write", todoWriteHandler(workspaceDir));
     this.executor.registerHandler("todo_list", todoListHandler(workspaceDir));
 
-    // Tools MCP (lazy, sekali per instance; gagal → warn, lanjut tanpa MCP).
+    // MCP tools (lazy, once per instance; failure → warn, continue without MCP).
     await this.ensureMcpLoaded();
 
     let messages: ModelMessage[];
@@ -358,7 +388,7 @@ export class SingleAgent {
       steps++;
       this.emit({ type: "step", step: steps, maxSteps: this.config.maxSteps });
 
-      // ── Auto-compact saat menyentuh >80% context window (sekali per turn) ──
+      // ── Auto-compact past 80% context window (once per turn) ──
       if (!compactedThisTurn && messages.length > 8) {
         const u = contextUsage(messages, this.config.model, this.config.provider);
         if (u.pct > AUTO_COMPACT_PCT) {
@@ -371,30 +401,33 @@ export class SingleAgent {
         }
       }
 
-      // ── Rate limit: tunggu slot request LLM (batal = berhenti) ──
+      // ── Rate limit: wait for an LLM request slot (abort = stop) ──
       try {
         await this.limiter.acquire(this.abort.signal);
       } catch {
         break;
       }
 
-      // ── LLM call dengan retry 429/5xx (pola sabana-dev orchestrator) ──
+      // ── LLM call with retry on 429/5xx (sabana-dev orchestrator pattern) ──
       let text = "";
       let reasoning = "";
       let toolCalls: ToolCallInfo[] = [];
       let lastError = "";
+      let timedOut = false;
       for (let attempt = 0; attempt < 3; attempt++) {
         text = "";
         reasoning = "";
         toolCalls = [];
         lastError = "";
+        timedOut = false;
+        const { signal, cleanup } = this.withLlmTimeout();
         try {
           for await (const ev of this.provider.generate({
             model: this.config.model,
             messages,
             tools: this.registry.toModelTools(),
             maxTokens: this.config.maxTokens,
-            signal: this.abort.signal,
+            signal,
           })) {
             if (ev.type === "text_delta") {
               text += ev.text;
@@ -410,20 +443,36 @@ export class SingleAgent {
           }
         } catch (e) {
           lastError = (e as Error).message;
+        } finally {
+          cleanup();
         }
         if (!lastError) break;
-        if (!/429|rate.?limit|quota|5\d\d|timeout|network/i.test(lastError)) break;
-        const wait = 10_000 * 2 ** attempt;
-        this.emit({ type: "warn", message: `LLM ${lastError.slice(0, 120)} — retry ${wait / 1000}s...` });
+        // Our own call timeout (not user cancel) → fail fast, never retry:
+        // retrying a hung provider just multiplies the hang.
+        if (/timed?\s*out/i.test(lastError) && !this.abort.signal.aborted) {
+          timedOut = true;
+          break;
+        }
+        if (!/429|rate.?limit|quota|5\d\d|network/i.test(lastError)) break;
+        const wait = Math.round(10_000 * 2 ** attempt * (0.8 + Math.random() * 0.4));
+        this.emit({ type: "warn", message: `LLM ${lastError.slice(0, 120)} — retrying in ${(wait / 1000).toFixed(1)}s...` });
         await new Promise((r) => setTimeout(r, wait));
       }
       if (text) this.emit({ type: "text_end" });
       if (reasoning) this.emit({ type: "reasoning_end" });
+      if (timedOut) {
+        const msg = `LLM request timed out (${((this.config.llmTimeoutMs ?? 120_000) / 1000).toFixed(0)}s per call). The provider may be overloaded — try again later or switch provider/model.`;
+        this.emit({ type: "error", message: msg });
+        return {
+          messages,
+          result: { success: false, steps, filesModified: [...this.filesModified], timeline: [...this.timeline], finalText: msg },
+        };
+      }
       if (lastError && toolCalls.length === 0 && !text) {
         this.emit({ type: "error", message: `LLM error: ${lastError}` });
         messages.push({
           role: "user",
-          content: `Tool error dari LLM: ${lastError}. Coba lanjutkan tanpa mengulang hal yang sama.`,
+          content: `Tool error from LLM: ${lastError}. Keep going without repeating the same thing.`,
         });
         continue;
       }
@@ -439,7 +488,7 @@ export class SingleAgent {
       });
       this.timeline.push(`step${steps}: text=${text.length}c tools=[${toolCalls.map((t) => t.name).join(",")}]`);
 
-      // ── Tidak ada tool call → selesai (final answer) ──
+      // ── No tool calls → done (final answer) ──
       if (toolCalls.length === 0) {
         finalText = text;
         if (text.trim()) {
@@ -449,11 +498,11 @@ export class SingleAgent {
             result: { success: true, steps, filesModified: [...this.filesModified], timeline: [...this.timeline], finalText },
           };
         }
-        messages.push({ role: "user", content: "Kamu belum melakukan apa-apa. Pakai tools untuk mengerjakan request, lalu jawab ringkas." });
+        messages.push({ role: "user", content: "You have not done anything yet. Use tools to work on the request, then answer concisely." });
         continue;
       }
 
-      // ── Eksekusi tool calls berurutan ──
+      // ── Execute tool calls in order ──
       for (const tc of toolCalls) {
         if (this.abort.signal.aborted) break;
         const looped = this.loops.record(tc.name, tc.args);
@@ -467,7 +516,7 @@ export class SingleAgent {
           this.loops.resetProgress();
           messages.push({
             role: "user",
-            content: `LOOP TERDETEKSI: ${looped.reason}. Berhenti memanggil read-only tools. Panggil write_file/modified_file SEKARANG.`,
+            content: `LOOP DETECTED: ${looped.reason}. Stop calling read-only tools. Call write_file/modified_file NOW.`,
           });
           break;
         }
@@ -496,7 +545,7 @@ export class SingleAgent {
           const eLoop = this.loops.recordError(msg);
           if (eLoop.detected) {
             messages.push({ role: "tool", tool_call_id: tc.id, content: redactSecrets(JSON.stringify(result.output)).slice(0, 20_000) });
-            messages.push({ role: "user", content: `${eLoop.reason} Coba pendekatan BERBEDA, jangan ulangi perintah yang sama.` });
+            messages.push({ role: "user", content: `${eLoop.reason} Try a DIFFERENT approach, do not repeat the same command.` });
             break;
           }
         }
@@ -507,7 +556,7 @@ export class SingleAgent {
         });
       }
 
-      // Trim mengikuti window model (ganti batas kaku 32 pesan)
+      // Trim to the model window (replaces the rigid 32-message cap)
       const refit = ensureFits(messages, this.config.model, this.config.provider);
       messages = refit.messages;
       if (refit.trimmed > 0) this.emit({ type: "trimmed", count: refit.trimmed });

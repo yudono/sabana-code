@@ -1,4 +1,4 @@
-// ─── Context-window guard: estimasi + trim agar muat di window model ───
+// ─── Context-window guard: estimate + trim to fit the model window ───
 import type { ModelMessage } from "../llm/types.js";
 import { estimateTokens, getContextWindow } from "../llm/models.js";
 
@@ -23,7 +23,7 @@ export function contextUsage(messages: ModelMessage[], model: string, provider: 
 }
 
 /**
- * Pangkas riwayat tertua agar estimasi <= window - reserve.
+ * Trim oldest history so the estimate stays <= window - reserve.
  * System message (index 0) dan user pertama selalu dipertahankan.
  */
 export function ensureFits(
@@ -53,8 +53,8 @@ export function ensureFits(
     }
   }
   const out = [...head, ...tail];
-  // Buang tool-result yatim di awal tail (induk tool_calls-nya ikut terpangkas) —
-  // tanpanya API menolak riwayat (tool tanpa tool_call).
+  // Drop orphan tool results at the tail start (their tool_calls parent was trimmed) —
+  // without this the API rejects the history (tool without tool_call).
   let orphans = 0;
   while (out.length > 2 && out[2].role === "tool") {
     const m = out.splice(2, 1)[0];

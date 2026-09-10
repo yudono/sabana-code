@@ -19,7 +19,7 @@ function freshWs(): string {
 }
 
 describe("filesystem tools", () => {
-  it("write lalu read mengembalikan konten bernomor baris", async () => {
+  it("write then read returns line-numbered content", async () => {
     const ws = freshWs();
     const w = (await writeFileHandler(ws)({ path: "a.txt", content: "hello\nworld\n" })) as {
       written: boolean;
@@ -34,7 +34,7 @@ describe("filesystem tools", () => {
     assert.ok(r.content.includes("2: world"));
   });
 
-  it("read mendukung rentang baris", async () => {
+  it("read supports line ranges", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "b.txt", content: "l1\nl2\nl3\nl4" });
     const r = (await readFileHandler(ws)({ path: "b.txt", startLine: 2, endLine: 3 })) as {
@@ -45,13 +45,13 @@ describe("filesystem tools", () => {
     assert.ok(!r.content.includes("l4"));
   });
 
-  it("read file hilang mengembalikan error", async () => {
+  it("reading a missing file returns an error", async () => {
     const ws = freshWs();
     const r = (await readFileHandler(ws)({ path: "nope.txt" })) as { error: string };
     assert.ok(r.error.includes("not found"));
   });
 
-  it("write di luar workspace ditolak", async () => {
+  it("writing outside the workspace is refused", async () => {
     const ws = freshWs();
     const r = (await writeFileHandler(ws)({ path: "../evil.txt", content: "x" })) as {
       error: string;
@@ -60,7 +60,7 @@ describe("filesystem tools", () => {
     assert.equal(r.denied, true);
   });
 
-  it("edit sukses mengubah konten", async () => {
+  it("successful edits change content", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "c.txt", content: "foo bar" });
     const r = (await modifiedFileHandler(ws)({ path: "c.txt", search: "bar", replace: "baz" })) as {
@@ -71,7 +71,7 @@ describe("filesystem tools", () => {
     assert.ok(back.content.includes("foo baz"));
   });
 
-  it("edit gagal bila search tidak ketemu atau ambigu", async () => {
+  it("edits fail when search is missing or ambiguous", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "d.txt", content: "aa bb aa" });
     const miss = (await modifiedFileHandler(ws)({ path: "d.txt", search: "zz", replace: "q" })) as {
@@ -84,7 +84,7 @@ describe("filesystem tools", () => {
     assert.ok(amb.error.includes("2x"));
   });
 
-  it("modified mengembalikan unified diff", async () => {
+  it("modified returns a unified diff", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "e.txt", content: "satu\ndua\ntiga\nempat\nlima\n" });
     const r = (await modifiedFileHandler(ws)({ path: "e.txt", search: "tiga", replace: "TIGA!" })) as {
@@ -103,7 +103,7 @@ describe("filesystem tools", () => {
     assert.ok(r.diff.includes(" satu")); // konteks
   });
 
-  it("buildDiff: hunk header + konteks benar untuk ganti multi-baris", () => {
+  it("buildDiff: correct hunk headers + context for multi-line replaces", () => {
     const oldC = ["a", "b", "c", "d", "e", "f", "g", "h"].join("\n");
     const newC = ["a", "b", "X", "Y", "e", "f", "g", "h"].join("\n");
     const d = buildDiff("f.txt", oldC, newC);
@@ -117,7 +117,7 @@ describe("filesystem tools", () => {
     assert.ok(d.diff.includes(" e"));
   });
 
-  it("delete menghapus file, menolak direktori berisi & path kabur", async () => {
+  it("delete removes files, refuses non-empty dirs & escaping paths", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "del.txt", content: "x" });
     await writeFileHandler(ws)({ path: "sub/isi.txt", content: "y" });
@@ -131,7 +131,7 @@ describe("filesystem tools", () => {
     assert.equal(esc.denied, true);
   });
 
-  it("list / glob / grep menemukan file", async () => {
+  it("list / glob / grep find files", async () => {
     const ws = freshWs();
     await writeFileHandler(ws)({ path: "src/app.ts", content: "export const answer = 42;\n" });
     const list = (await listDirectoryHandler(ws)({})) as { listing: string };
@@ -145,5 +145,33 @@ describe("filesystem tools", () => {
     assert.equal(grep.results.length, 1);
     assert.equal(grep.results[0].file, "src/app.ts");
     assert.equal(grep.results[0].line, 1);
+  });
+
+  it("refuses to read sensitive files (SSH keys, shadow, pem, key)", async () => {
+    const ws = freshWs();
+    for (const p of ["~/.ssh/id_rsa", "~/.ssh/id_ed25519", "/etc/shadow", "certs/server.pem", "tls/server.key", "id_rsa"]) {
+      const r = (await readFileHandler(ws)({ path: p })) as { error?: string; denied?: boolean };
+      assert.ok(r.denied === true, p);
+      assert.match(r.error || "", /sensitive/i, p);
+    }
+  });
+
+  it("grep skips sensitive files during workspace walks", async () => {
+    const ws = freshWs();
+    await writeFileHandler(ws)({ path: "notes.txt", content: "matchme once\n" });
+    await writeFileHandler(ws)({ path: "id_rsa", content: "matchme secret-key-material\n" });
+    const grep = (await grepHandler(ws)({ query: "matchme" })) as {
+      results: Array<{ file: string; line: number }>;
+    };
+    assert.equal(grep.results.length, 1);
+    assert.equal(grep.results[0].file, "notes.txt");
+  });
+
+  it("still reads harmless dotfiles and public keys", async () => {
+    const ws = freshWs();
+    await writeFileHandler(ws)({ path: ".env", content: "PORT=3000\n" });
+    const r = (await readFileHandler(ws)({ path: ".env" })) as { content?: string; error?: string };
+    assert.ok(!r.error, r.error);
+    assert.ok(r.content?.includes("PORT=3000"));
   });
 });

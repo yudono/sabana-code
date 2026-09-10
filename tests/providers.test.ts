@@ -35,7 +35,7 @@ function fakeOpenAICompat(handler: (reqUrl: string, auth: string) => { status: n
 }
 
 describe("provider presets", () => {
-  it("groq/together/openrouter/perplexity terdaftar + butuh key", () => {
+  it("groq/together/openrouter/perplexity registered + need keys", () => {
     for (const p of ["groq", "together", "openrouter", "perplexity"]) {
       assert.ok(SUPPORTED_PROVIDERS.includes(p), `${p} hilang`);
       assert.ok(PROVIDER_PRESETS[p].baseUrl.startsWith("https://"), `${p} base`);
@@ -44,7 +44,7 @@ describe("provider presets", () => {
     }
   });
 
-  it("resolveProvider groq/custom pakai default bila env kosong", () => {
+  it("resolveProvider groq/custom uses defaults when env is empty", () => {
     assert.equal(resolveProvider("groq").baseUrl, "https://api.groq.com/openai/v1");
     assert.equal(resolveProvider("groq").apiKey, "");
     assert.equal(resolveProvider("openrouter").baseUrl, "https://openrouter.ai/api/v1");
@@ -52,7 +52,7 @@ describe("provider presets", () => {
 });
 
 describe("isChatModelId", () => {
-  it("menyaring non-chat", () => {
+  it("filters out non-chat", () => {
     assert.equal(isChatModelId("gpt-4o"), true);
     assert.equal(isChatModelId("llama-3.3-70b-versatile"), true);
     assert.equal(isChatModelId("whisper-1"), false);
@@ -63,7 +63,7 @@ describe("isChatModelId", () => {
 });
 
 describe("fetchProviderModels", () => {
-  it("live dari endpoint OpenAI-compatible + kirim Bearer", async () => {
+  it("live from OpenAI-compatible endpoint + sends Bearer", async () => {
     let seenAuth = "";
     const { server, base } = await fakeOpenAICompat((url, auth) => {
       seenAuth = auth;
@@ -84,7 +84,7 @@ describe("fetchProviderModels", () => {
     }
   });
 
-  it("401 → ok:false + pesan", async () => {
+  it("401 → ok:false + message", async () => {
     const { server, base } = await fakeOpenAICompat(() => ({ status: 401, body: { error: "bad key" } }));
     try {
       process.env.CUSTOM_BASEURL = base;
@@ -97,13 +97,13 @@ describe("fetchProviderModels", () => {
     }
   });
 
-  it("tanpa key → ok:false cepat", async () => {
+  it("no key → fast ok:false", async () => {
     const r = await fetchProviderModels("groq");
     assert.equal(r.ok, false);
     assert.match(r.error || "", /API key/);
   });
 
-  it("anthropic fallback katalog (tanpa network)", async () => {
+  it("anthropic catalog fallback (no network)", async () => {
     const r = await fetchProviderModels("anthropic");
     assert.equal(r.ok, true);
     assert.equal(r.source, "catalog");
@@ -111,7 +111,7 @@ describe("fetchProviderModels", () => {
   });
 });
 
-describe("perintah providers/models terparse", () => {
+describe("providers/models commands parse", () => {
   it("parse /providers use groq + /models filter", () => {
     assert.deepEqual(parseCommand("/providers use groq"), { name: "providers", args: ["use", "groq"] });
     assert.deepEqual(parseCommand("/models llama"), { name: "models", args: ["llama"] });

@@ -1,6 +1,6 @@
-// ─── settings.json di ~/sabana-code/ — pengganti .env ───
-// Dibuat saat pertama kali dijalankan (beserta sessions/, logs/, sabana.db).
-// Struktur baru: default_provider + default_model + providers { [name]: { baseUrl, apiKey, model, maxTokens } }
+// ─── settings.json in ~/sabana-code/ — replaces .env ───
+// Created on first run (alongside sessions/, logs/, sabana.db).
+// Structure: default_provider + default_model + providers { [name]: { baseUrl, apiKey, model, maxTokens } }
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureHome, sabanaHome } from "./home.js";
@@ -29,49 +29,49 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-2.5-flash",
     needsKey: true,
-    hint: "Gemini via endpoint OpenAI-compatible (aistudio.google.com)",
+    hint: "Gemini via OpenAI-compatible endpoint (aistudio.google.com)",
   },
   groq: {
     baseUrl: "https://api.groq.com/openai/v1",
     model: "llama-3.3-70b-versatile",
     needsKey: true,
-    hint: "Groq ultra-cepat (console.groq.com)",
+    hint: "Ultra-fast Groq (console.groq.com)",
   },
   together: {
     baseUrl: "https://api.together.xyz/v1",
     model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     needsKey: true,
-    hint: "Together AI, banyak model open (api.together.ai)",
+    hint: "Together AI, many open models (api.together.ai)",
   },
   openrouter: {
     baseUrl: "https://openrouter.ai/api/v1",
     model: "qwen/qwen-2.5-coder-32b-instruct",
     needsKey: true,
-    hint: "OpenRouter, ratusan model (openrouter.ai)",
+    hint: "OpenRouter, hundreds of models (openrouter.ai)",
   },
   perplexity: {
     baseUrl: "https://api.perplexity.ai",
     model: "sonar-pro",
     needsKey: true,
-    hint: "Perplexity + pencarian web (perplexity.ai)",
+    hint: "Perplexity + web search (perplexity.ai)",
   },
   ollama: {
     baseUrl: "http://localhost:11434/v1",
     model: "qwen2.5-coder",
     needsKey: false,
-    hint: "Lokal, gratis (butuh 'ollama serve' + 'ollama pull <model>')",
+    hint: "Local, free (needs 'ollama serve' + 'ollama pull <model>')",
   },
   custom: {
     baseUrl: "",
     model: "",
     needsKey: true,
-    hint: "URL kustom yang OpenAI-compatible (proxy / provider lain)",
+    hint: "Custom OpenAI-compatible URL (proxy / other provider)",
   },
   mock: {
     baseUrl: "",
     model: "mock",
     needsKey: false,
-    hint: "Deterministik tanpa LLM (benchmark / coba-coba)",
+    hint: "Deterministic, no LLM (benchmark / experiments)",
   },
 };
 
@@ -133,7 +133,7 @@ export function loadSettings(): SettingsFile {
   }
 }
 
-/** Migrate old format: { env: { SABANA_PROVIDER, SABANA_BASE_URL, SABANA_API_KEY, SABANA_MODEL, ... } }
+/** Migrate the old format: { env: { SABANA_PROVIDER, SABANA_BASE_URL, SABANA_API_KEY, SABANA_MODEL, ... } }
  *  → new format: { default_provider, default_model, providers: { ... }, tavily_api_key } */
 function migrateOldSettings(old: { env: Record<string, string>; providers?: Record<string, { apiKey: string; baseUrl: string }> }): SettingsFile {
   const env = old.env;
@@ -172,7 +172,7 @@ export function saveSettings(s: SettingsFile): void {
   writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + "\n");
 }
 
-/** Get active provider config (from settings). */
+/** Get the active provider config (from settings). */
 export function getActiveProviderConfig(): ProviderConfig | null {
   const s = loadSettings();
   return s.providers[s.default_provider] || null;
@@ -184,7 +184,7 @@ export function getProviderConfig(name: string): ProviderConfig | null {
   return s.providers[name] || null;
 }
 
-/** Update default provider + model (ensures model belongs to provider). */
+/** Update the default provider + model (model must belong to the provider). */
 export function setDefaultProvider(provider: string, model?: string): void {
   const s = loadSettings();
   const cfg = s.providers[provider];
@@ -217,14 +217,14 @@ export function listStoredProviders(): string[] {
   return Object.keys(loadSettings().providers);
 }
 
-/** Salin tavily_api_key ke process.env bila belum di-set. */
+/** Copy tavily_api_key into process.env when unset. */
 export function initEnvFromSettings(): SettingsFile {
   const s = loadSettings();
   if (s.tavily_api_key && !process.env.TAVILY_API_KEY) process.env.TAVILY_API_KEY = s.tavily_api_key;
   return s;
 }
 
-/** Batas request LLM per menit (default 60; <=0 = tanpa batas). */
+/** LLM requests-per-minute cap (default 60; <=0 = unlimited). */
 export function rpmFromSettings(): number {
   const raw = process.env.SABANA_RPM || "60";
   const n = parseInt(raw, 10);

@@ -17,7 +17,7 @@ function executor(ws: string): ToolExecutor {
 }
 
 describe("terminal shell", () => {
-  it("perintah sukses mengembalikan exitCode 0 + stdout", async () => {
+  it("successful commands return exitCode 0 + stdout", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const r = (await shellHandler(ws)({ command: "echo hello-shell" })) as {
       exitCode: number;
@@ -27,7 +27,7 @@ describe("terminal shell", () => {
     assert.ok(r.stdout.includes("hello-shell"));
   });
 
-  it("perintah gagal mengembalikan exitCode != 0", async () => {
+  it("failed commands return exitCode != 0", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const r = (await shellHandler(ws)({ command: "exit 3" })) as {
       exitCode: number;
@@ -35,7 +35,7 @@ describe("terminal shell", () => {
     assert.equal(r.exitCode, 3);
   });
 
-  it("executor memblokir dev server agar loop tidak gantung", async () => {
+  it("executor blocks dev servers so the loop never hangs", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const ex = executor(ws);
     const blocked = await ex.execute({ id: "1", name: "shell", args: { command: "npm run dev" } });
@@ -43,14 +43,14 @@ describe("terminal shell", () => {
     assert.ok(JSON.stringify(blocked.output).includes("BLOCKED"));
   });
 
-  it("executor mengizinkan perintah biasa", async () => {
+  it("executor allows ordinary commands", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const ex = executor(ws);
     const r = await ex.execute({ id: "2", name: "shell", args: { command: "echo ok" } });
     assert.equal(r.status, "success");
   });
 
-  it("executor menolak tool tak dikenal", async () => {
+  it("executor rejects unknown tools", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const ex = executor(ws);
     const r = await ex.execute({ id: "3", name: "nope_tool", args: {} });

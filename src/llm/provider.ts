@@ -1,6 +1,6 @@
 // ─── LLM Provider — single-agent, OpenAI-compatible ───
-// Diadaptasi dari sabana-dev apps/api/src/agents/llm/provider.ts
-// Mendukung: openai (default, OpenAI-compatible apapun), anthropic, ollama.
+// Adapted from sabana-dev apps/api/src/agents/llm/provider.ts
+// Supports: openai (default, any OpenAI-compatible), anthropic, ollama.
 
 import type {
   ModelEvent,

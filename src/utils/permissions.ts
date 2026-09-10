@@ -1,6 +1,6 @@
-// ─── Permission engine — port ringkas dari sabana-dev agents/permissions/engine.ts ───
-// Keputusan "allow all"/"deny" disimpan PER SESSION (bukan global): session baru
-// berarti user mengulang persetujuan. "Allow once" tidak disimpan.
+// ─── Permission engine — slim port from sabana-dev agents/permissions/engine.ts ───
+// "allow all"/"deny" decisions are stored PER SESSION (not global): a new session
+// means re-approval. "Allow once" is never stored.
 import * as readline from "node:readline";
 import type { PermissionDecision, RiskLevel } from "../tools/types.js";
 import { isSafeShellCommand } from "../tools/shellPolicy.js";
@@ -10,7 +10,7 @@ export interface ApprovalState {
   denied: string[];
 }
 
-/** once = izinkan eksekusi ini saja; all = ingat untuk yang serupa; deny/cancel = tolak. */
+/** once = allow just this run; all = remember similar ones; deny/cancel = refuse. */
 export type AskerVerdict = "once" | "all" | "deny" | "cancel";
 
 export interface PermissionRequest {
@@ -18,13 +18,13 @@ export interface PermissionRequest {
   args: Record<string, unknown>;
   command?: string;
   key: string;
-  /** Perintah dasar utk shell (mis. "npm"), undefined utk tool file. */
+  /** Base command for shell (e.g. "npm"), undefined for file tools. */
   base?: string;
 }
 
 export type PermissionAsker = (req: PermissionRequest) => Promise<AskerVerdict>;
 
-/** Kunci keputusan: shell dikelompokkan per perintah dasar, tool file per path. */
+/** Decision key: shell grouped by base command, file tools by path. */
 export function permissionKey(
   tool: string,
   args: Record<string, unknown>,
@@ -70,7 +70,7 @@ export class PermissionEngine {
     signal?: AbortSignal,
   ): Promise<PermissionDecision> {
     if (risk === "safe") return "allow";
-    // Shell read-only (ls, cd, cat, ...) bebas izin; sisanya tetap ditanya.
+    // Read-only shell (ls, cd, cat, ...) needs no approval; the rest is still asked.
     if (tool === "shell" && command && isSafeShellCommand(command)) return "allow";
     const { key, base } = permissionKey(tool, args, command);
     if (this.allowAll.has(key) || this.allowAll.has("*") || this.allowAll.has("shell:*")) return "allow";
@@ -78,7 +78,7 @@ export class PermissionEngine {
     if (this.autoApprove) return "allow";
     if (signal?.aborted) return "deny";
     if (this.opts?.asker) return this.askViaUi(key, { tool, args, command, key, base }, signal);
-    // Headless (benchmark/test/pipe): jangan gantung menunggu stdin.
+    // Headless (benchmark/test/pipe): never hang waiting on stdin.
     if (!process.stdin.isTTY) return "allow";
     return this.prompt(tool, args, command, key);
   }
@@ -103,7 +103,7 @@ export class PermissionEngine {
         },
       );
     });
-    // "cancel" (mis. Ctrl+C) ditolak TANPA disimpan — bukan keputusan user.
+    // "cancel" (e.g. Ctrl+C) is refused WITHOUT saving — not a user decision.
     if (verdict === "all") {
       this.allowAll.add(key);
       return "allow";

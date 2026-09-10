@@ -6,7 +6,7 @@ import { webFetchHandler, webSearchHandler } from "../src/tools/web.js";
 initEnvFromSettings();
 
 describe("web tools", () => {
-  it("web_fetch mengambil halaman sebagai teks", async (t) => {
+  it("web_fetch fetches a page as text", async (t) => {
     const r = (await webFetchHandler()({ url: "https://example.com", maxChars: 2000 })) as {
       content?: string;
       error?: string;
@@ -19,12 +19,12 @@ describe("web tools", () => {
     assert.ok(r.content.includes("Example Domain"));
   });
 
-  it("web_fetch menolak URL tak valid", async () => {
+  it("web_fetch rejects invalid URLs", async () => {
     const r = (await webFetchHandler()({ url: "bukan-url" })) as { error: string };
-    assert.ok(r.error.includes("tidak valid"));
+    assert.ok(r.error.includes("Invalid URL"));
   });
 
-  it("web_search mengembalikan hasil (butuh TAVILY_API_KEY)", async (t) => {
+  it("web_search returns results (needs TAVILY_API_KEY)", async (t) => {
     if (!process.env.TAVILY_API_KEY) {
       t.skip("TAVILY_API_KEY kosong — skip");
       return;

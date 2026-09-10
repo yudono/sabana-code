@@ -1,4 +1,4 @@
-// ─── Tool executor — diadaptasi dari sabana-dev apps/api/src/agents/tools/executor.ts ───
+// ─── Tool executor — adapted from sabana-dev apps/api/src/agents/tools/executor.ts ───
 import type { ToolCall, ToolResult } from "./types.js";
 import type { ToolRegistry } from "./registry.js";
 import { permissionKey, type PermissionEngine } from "../utils/permissions.js";
@@ -46,13 +46,13 @@ export class ToolExecutor {
     const command = call.name === "shell" ? (call.args.command as string) : undefined;
     const decision = await this.permissions.check(call.name, call.args, tool.riskLevel, command, signal);
     if (decision === "deny") {
-      // Sebutkan kunci izinnya agar user/LLM paham: tolak berlaku per session.
-      // Jangan di-retry — model harus ganti cara atau minta user (session baru me-reset).
+      // Name the permission key so user/LLM understand: denial lasts per session.
+      // Do not retry — the model must switch approaches or ask the user (new sessions reset).
       const { key } = permissionKey(call.name, call.args, command);
       return fail({
         error:
-          `Permission denied: ${call.name}${command ? ` (${command})` : ""} [${key} ditolak untuk session ini — ` +
-          `JANGAN ulangi perintah serupa; lanjutkan dengan cara lain atau minta user me-reset via session baru]`,
+          `Permission denied: ${call.name}${command ? ` (${command})` : ""} [${key} denied for this session — ` +
+          `do NOT retry similar commands; continue another way or ask the user to reset via a new session]`,
       });
     }
 
@@ -61,9 +61,9 @@ export class ToolExecutor {
         if (re.test(call.args.command)) {
           return fail({
             error:
-              `BLOCKED: perintah akan menggantung agent loop (dev server / sleep / background). ` +
+              `BLOCKED: the command would hang the agent loop (dev server / sleep / background). ` +
               `Command: ${call.args.command}\n` +
-              `Tulis file saja dan berhenti — user yang akan menjalankan server sendiri.`,
+              `Just write the files and stop — the user runs servers themselves.`,
           });
         }
       }

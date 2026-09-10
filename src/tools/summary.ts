@@ -1,6 +1,6 @@
-// ─── Ringkasan tool-call untuk tampilan: JANGAN dump isi file/output ───
-// Baris panggilan:  "read_file App.tsx", "modified_file App.tsx", "$ npm test"
-// Baris hasil:      "(baris 1–50 dari 320)", "(+1.2k)", "(exit 0 · 1.2s)"
+// ─── One-line tool-call summaries for display: NEVER dump file/output contents ───
+// Call line:  "read_file App.tsx", "modified_file App.tsx", "$ npm test"
+// Result line: "(lines 1–50 of 320)", "(+1.2k)", "(exit 0 · 1.2s)"
 
 export function fmtBytes(n: number): string {
   const a = Math.abs(n);
@@ -37,7 +37,7 @@ function asObj(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
 }
 
-/** Satu baris "sedang mengerjakan apa" — tanpa isi file. */
+/** One "what is it doing" line — no file contents. */
 export function summarizeCall(name: string, args: Record<string, unknown>): string {
   const path = str(args.path);
   switch (name) {
@@ -99,7 +99,7 @@ function errText(output: unknown): string {
   return e ?? "error";
 }
 
-/** Satu baris hasil: stat diff / exit code / hitungan — tanpa isi. */
+/** One result line: diff stats / exit code / counts — no contents. */
 export function summarizeResult(name: string, r: ToolOutcome): string | null {
   if (r.status !== "success") return oneLine(errText(r.output).split("\n")[0], 140);
   const o = asObj(r.output);
@@ -111,19 +111,19 @@ export function summarizeResult(name: string, r: ToolOutcome): string | null {
       const e = num("endLine");
       const t = num("totalLines");
       if (s === null) return null;
-      return `baris ${s}–${e ?? "?"} dari ${t ?? "?"}`;
+      return `lines ${s}–${e ?? "?"} of ${t ?? "?"}`;
     }
     case "write_file": {
       const b = num("bytes");
       const l = num("lines");
       if (b === null) return null;
-      return `+${fmtBytes(b)}${l !== null ? `, ${l} baris` : ""}`;
+      return `+${fmtBytes(b)}${l !== null ? `, ${l} lines` : ""}`;
     }
     case "modified_file": {
       const a = num("added");
       const r = num("removed");
       if (a === null || r === null) {
-        // Kompatibel output lama berbasis byte.
+        // Compatible with legacy byte-based output.
         const d = num("bytesChanged");
         if (d === null) return null;
         return `(${fmtSigned(d)})`;
@@ -131,7 +131,7 @@ export function summarizeResult(name: string, r: ToolOutcome): string | null {
       return `(+${a}, -${r})`;
     }
     case "delete_file": {
-      return o.directory ? "(direktori dihapus)" : "(dihapus)";
+      return o.directory ? "(directory deleted)" : "(deleted)";
     }
     case "shell": {
       const code = num("exitCode") ?? 0;
@@ -140,19 +140,19 @@ export function summarizeResult(name: string, r: ToolOutcome): string | null {
     }
     case "list_directory": {
       const n = num("entries");
-      return n === null ? null : `${n} entri`;
+      return n === null ? null : `${n} entries`;
     }
     case "glob": {
       const n = num("count");
-      return n === null ? null : `${n} file`;
+      return n === null ? null : `${n} files`;
     }
     case "grep": {
       const n = num("count");
-      return n === null ? null : `${n} cocok`;
+      return n === null ? null : `${n} matches`;
     }
     case "web_search": {
       const res = o.results;
-      return Array.isArray(res) ? `${res.length} hasil` : null;
+      return Array.isArray(res) ? `${res.length} results` : null;
     }
     case "web_fetch": {
       const n = num("length");

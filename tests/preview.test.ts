@@ -18,7 +18,7 @@ function ref(name: string, extra: Partial<PreviewRef> = {}): PreviewRef {
 }
 
 describe("buildPreviewForTool", () => {
-  it("read/write baca live dari disk + nomor baris + highlight ts", () => {
+  it("read/write reads live from disk + line numbers + ts highlight", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       { name: "write_file", preview: ref("write_file", { path: "App.tsx" }), summary: "write_file App.tsx" },
@@ -30,7 +30,7 @@ describe("buildPreviewForTool", () => {
     assert.ok(pv.body.includes("const x"));
   });
 
-  it("file hilang → pesan error + fallback output tersimpan", () => {
+  it("missing files → error message + stored output fallback", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       {
@@ -42,11 +42,11 @@ describe("buildPreviewForTool", () => {
       ws,
     );
     assert.equal(pv.lang, "plain");
-    assert.ok(pv.body.includes("tidak ada"));
+    assert.ok(pv.body.includes("missing"));
     assert.ok(pv.body.includes("isi lama"));
   });
 
-  it("path escape workspace ditolak", () => {
+  it("workspace-escaping paths refused", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       { name: "read_file", preview: ref("read_file", { path: "../luar.txt" }), summary: "x" },
@@ -55,7 +55,7 @@ describe("buildPreviewForTool", () => {
     assert.ok(pv.body.includes("escapes workspace"));
   });
 
-  it("modified_file tampilkan diff tersimpan", () => {
+  it("modified_file shows the stored diff", () => {
     const ws = freshWs();
     const diff = "--- a.txt\n+++ a.txt\n@@ -1,2 +1,2 @@\n-old\n+new";
     const pv = buildPreviewForTool(
@@ -71,16 +71,16 @@ describe("buildPreviewForTool", () => {
     assert.ok(pv.body.includes("+new"));
   });
 
-  it("modified_file tanpa diff → pesan jelas", () => {
+  it("modified_file without diff → clear message", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       { name: "modified_file", preview: ref("modified_file", { path: "a.txt" }), summary: "x" },
       ws,
     );
-    assert.ok(pv.body.includes("tidak tersimpan"));
+    assert.ok(pv.body.includes("No stored diff"));
   });
 
-  it("delete_file tampilkan catatan", () => {
+  it("delete_file shows a note", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       {
@@ -91,10 +91,10 @@ describe("buildPreviewForTool", () => {
       },
       ws,
     );
-    assert.ok(pv.body.includes("Dihapus: a.txt"));
+    assert.ok(pv.body.includes("Deleted: a.txt"));
   });
 
-  it("shell tampilkan command + stdout/stderr", () => {
+  it("shell shows command + stdout/stderr", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       {
@@ -112,7 +112,7 @@ describe("buildPreviewForTool", () => {
     assert.ok(pv.body.includes("boom"));
   });
 
-  it("shell: ANSI di-strip + tampilkan command", () => {
+  it("shell: ANSI stripped + command shown", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       {
@@ -127,7 +127,7 @@ describe("buildPreviewForTool", () => {
     assert.ok(!pv.body.includes("\x1b[32m"));
   });
 
-  it("web_fetch tampil sebagai markdown", () => {
+  it("web_fetch renders as markdown", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       { name: "web_fetch", preview: ref("web_fetch", { url: "https://x.test" }), summary: "fetch", output: "# Judul\nisi" },
@@ -136,7 +136,7 @@ describe("buildPreviewForTool", () => {
     assert.equal(pv.lang, "md");
   });
 
-  it("file python terdeteksi py (bukan code generik)", () => {
+  it("python files detected as py (not generic code)", () => {
     const ws = freshWs();
     writeFileSync(join(ws, "main.py"), "def f():\n    pass\n");
     const pv = buildPreviewForTool(
@@ -146,7 +146,7 @@ describe("buildPreviewForTool", () => {
     assert.equal(pv.lang, "py");
   });
 
-  it("tool lain fallback ke output mentah", () => {
+  it("other tools fall back to raw output", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(
       { name: "glob", preview: ref("glob", { pattern: "**/*.ts" }), summary: "glob", output: '["a.ts"]' },
