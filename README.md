@@ -18,7 +18,8 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
 - **Interactive fullscreen TUI** — chat, prompt input, live tool-calling with step-by-step summaries
   (`read_file App.tsx`, `edit_file App.tsx (+11, -2)`, `$ npm test → exit 0`).
   Click a tool call to open a **fullscreen preview** (syntax highlighting) —
-  press `Esc` to close. `↑`/`↓` to scroll history, mouse clicks supported.
+  `Esc`/`q` to close. Type `/` for command autocomplete, `↑`/`↓` for prompt
+  history, wheel/trackpad gestures or `PgUp`/`PgDn` to scroll chat, mouse clicks supported.
 - **Per-session shell approval** — risky commands (`rm`, `mkdir`, `npm`, …) require
   inline confirmation: `[y]` once, `[a]` all similar commands at once
   (e.g., approve `npm` once → `npm install`/`npm run build`/`npm test` all pass),
@@ -109,7 +110,7 @@ sabana-code auth logout openai
 ```
 
 Options: `-C/--workspace`, `--model`, `--provider openai|anthropic|google|ollama|custom|mock`,
-`--max-steps` (default 40), `--auto-approve`.
+`--max-steps` (default 40), `--auto-approve`, `-V/--version`.
 
 ## TUI Usage
 
@@ -143,11 +144,15 @@ TUI commands:
 | `/tools`, `/clear`, `/quit` | list tools, clear screen, exit |
 
 Click any tool row to open a **fullscreen preview** (auto-detected syntax highlighting
-for code, unified diff for edits, full stdout/stderr for shell) — `Esc` to close,
+for code, unified diff for edits, full stdout/stderr for shell) — `Esc`/`q` to close,
 `↑↓`/`PgUp`/`PgDn` to scroll inside it.
 
+Typing `/` opens a **command autocomplete dropdown** — `↑↓` to pick, `Enter` to
+run an exact match or complete the command first, `Esc` to dismiss.
+
 `Ctrl+C` cancels the running turn; `Ctrl+C` again to exit (session auto-saved).
-`↑`/`↓` scrolls chat history (3 lines), `PgUp`/`PgDn` scrolls one screen; send a new message to jump back to bottom.
+`↑`/`↓` walks shell-style prompt history, `PgUp`/`PgDn` or mouse-wheel/trackpad
+gesture scrolls the chat; send a new message to jump back to bottom.
 
 ### Multi-provider & multi-model
 
