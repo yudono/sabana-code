@@ -1,6 +1,6 @@
 # sabana-code
 
-![sabana-code TUI](https://raw.githubusercontent.com/yudono/sabana-code/main/Screenshot.png)
+![sabana-code TUI](https://raw.githubusercontent.com/yudono/sabana-code/6f7cb1f82763930ee65f1eaf894a3d53c0ab73e0/Screenshot.png)
 
 A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a **single agent loop** with tool calling for filesystem, terminal, and internet search. Runs from any directory — sessions, credentials, logs, and database are stored globally in `~/sabana-code/`.
 
