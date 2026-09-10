@@ -20,6 +20,7 @@ import { summarizeCall, summarizeResult } from "../tools/summary.js";
 import { highlight, type HlSeg } from "./highlight.js";
 import { createMouseParser, stripMouseSequences } from "./mouse.js";
 import { buildPreviewForTool } from "./preview.js";
+import { bannerSegs, hasChatItems } from "./banner.js";
 import type { PermissionAsker, PermissionRequest, AskerVerdict } from "../utils/permissions.js";
 import { listAgents, loadAgent, runSubAgent } from "../subagents.js";
 import { listSkills, loadSkill } from "../skills.js";
@@ -395,9 +396,8 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   }, [stdout]);
 
   const [session, setSession] = useState<Session>(initialSession);
-  const [items, setItems] = useState<ChatItem[]>(() => [
-    { kind: "info", tone: "dim", text: "sabana-code TUI — ketik pesan untuk mulai, /help untuk perintah, Ctrl+C untuk batal/keluar." },
-    ...(initialSession.messages.length > 0
+  const [items, setItems] = useState<ChatItem[]>(() =>
+    initialSession.messages.length > 0
       ? [
           {
             kind: "info" as const,
@@ -406,8 +406,8 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
           },
           ...rebuildItems(initialSession.messages),
         ]
-      : []),
-  ]);
+      : [],
+  );
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const [stream, setStream] = useState("");
@@ -1165,6 +1165,8 @@ interface PreviewState {
 
   const usage = contextUsage(session.messages, session.model, session.provider);
   const visible = items.slice(cutoff).slice(-300);
+  // Brand besar tengah saat belum ada percakapan; header kecil biasa setelah ada chat.
+  const showBanner = !preview && !hasChatItems(visible);
   const projectName = workspaceDir.split("/").filter(Boolean).pop() || workspaceDir;
   const cols = Math.max(40, size.columns);
   const rows = Math.max(12, size.rows);
@@ -1287,6 +1289,27 @@ interface PreviewState {
                 Esc tutup · ↑↓/PgUp/PgDn scroll{pvTotalRows > previewAvail ? ` · ↑${pvScrollClamped}/${pvTotalRows}` : ""}
               </Text>
             </Box>
+          </Box>
+        ) : showBanner ? (
+          <Box key="__banner" flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
+            {bannerSegs().map((ln, i) => (
+              <Text key={i}>
+                {ln.every((s) => s.text === "") ? (
+                  " "
+                ) : (
+                  ln.map((s, j) => (
+                    <Text key={j} color={s.dim ? undefined : s.color} dimColor={s.dim ? true : undefined} bold={s.bold}>
+                      {s.text}
+                    </Text>
+                  ))
+                )}
+              </Text>
+            ))}
+            {stream ? (
+              <Box marginTop={1} alignSelf="flex-start">
+                <Text>{stream}▍</Text>
+              </Box>
+            ) : null}
           </Box>
         ) : (
           windowed.map((it, ri) => {

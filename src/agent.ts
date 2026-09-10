@@ -74,6 +74,8 @@ export type AgentEvent =
   | { type: "step"; step: number; maxSteps: number }
   | { type: "text"; delta: string }
   | { type: "text_end" }
+  | { type: "reasoning"; delta: string }
+  | { type: "reasoning_end" }
   | { type: "tool_start"; call: ToolCallInfo }
   | { type: "tool_end"; call: ToolCallInfo; status: string; ms: number; bytes: number; summary?: string; output?: unknown }
   | { type: "warn"; message: string }
@@ -378,10 +380,12 @@ export class SingleAgent {
 
       // ── LLM call dengan retry 429/5xx (pola sabana-dev orchestrator) ──
       let text = "";
+      let reasoning = "";
       let toolCalls: ToolCallInfo[] = [];
       let lastError = "";
       for (let attempt = 0; attempt < 3; attempt++) {
         text = "";
+        reasoning = "";
         toolCalls = [];
         lastError = "";
         try {
@@ -395,6 +399,9 @@ export class SingleAgent {
             if (ev.type === "text_delta") {
               text += ev.text;
               this.emit({ type: "text", delta: ev.text });
+            } else if (ev.type === "reasoning_delta") {
+              reasoning += ev.text;
+              this.emit({ type: "reasoning", delta: ev.text });
             } else if (ev.type === "tool_call") {
               toolCalls.push({ id: ev.id, name: ev.name, args: ev.args });
             } else if (ev.type === "error") {
@@ -411,6 +418,7 @@ export class SingleAgent {
         await new Promise((r) => setTimeout(r, wait));
       }
       if (text) this.emit({ type: "text_end" });
+      if (reasoning) this.emit({ type: "reasoning_end" });
       if (lastError && toolCalls.length === 0 && !text) {
         this.emit({ type: "error", message: `LLM error: ${lastError}` });
         messages.push({

@@ -27,7 +27,7 @@ export interface Checkpoint {
   files: FileSnapshot[];
 }
 
-const MAX_CHECKPOINTS = 20;
+const MAX_CHECKPOINTS = 30;
 const MAX_FILE_BYTES = 500_000;
 const MAX_FILES = 100;
 
@@ -119,6 +119,44 @@ function loadCheckpoint(sessionId: string, id: string): Checkpoint | null {
   } catch {
     return null;
   }
+}
+
+export interface CheckpointMeta {
+  id: string;
+  label: string;
+  createdAt: string;
+}
+
+const SUBAGENT_PREFIX = "[sub-agent ";
+
+/**
+ * Pasangkan pesan user (berurutan) dengan checkpoint (menaik) berdasar label.
+ * Dipakai klik-kanan revert: tiap prompt user → checkpoint turn-nya.
+ * Tahan terhadap compact/pruning: pesan sub-agent dilewati (tak pernah punya
+ * checkpoint), duplikat teks dipasangkan berurutan (ke-1 → ke-1), yang tak
+ * cocok (ter-pruning) tidak dapat pasangan. Mengembalikan peta indeks→cpId.
+ */
+export function pairPromptCheckpoints(userTexts: string[], cps: CheckpointMeta[]): Map<number, string> {
+  const byLabel = new Map<string, string[]>();
+  const sorted = [...cps].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  for (const c of sorted) {
+    const arr = byLabel.get(c.label);
+    if (arr) arr.push(c.id);
+    else byLabel.set(c.label, [c.id]);
+  }
+  const used = new Map<string, number>();
+  const out = new Map<number, string>();
+  userTexts.forEach((t, i) => {
+    if (t.startsWith(SUBAGENT_PREFIX)) return;
+    const label = t.trim().slice(0, 80);
+    const arr = byLabel.get(label);
+    if (!arr) return;
+    const k = used.get(label) || 0;
+    if (k >= arr.length) return;
+    used.set(label, k + 1);
+    out.set(i, arr[k]);
+  });
+  return out;
 }
 
 export interface RewindResult {
