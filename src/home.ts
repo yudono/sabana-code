@@ -24,6 +24,22 @@ export function agentsDir(): string {
   return join(sabanaHome(), "agents");
 }
 
+export function skillsDir(): string {
+  return join(sabanaHome(), "skills");
+}
+
+export function todosDir(): string {
+  return join(sabanaHome(), "todos");
+}
+
+export function checkpointsDir(): string {
+  return join(sabanaHome(), "checkpoints");
+}
+
+export function mcpPath(): string {
+  return join(sabanaHome(), "mcp.json");
+}
+
 export function logsDir(): string {
   return join(sabanaHome(), "logs");
 }
@@ -33,16 +49,16 @@ export function dbPath(): string {
 }
 
 /** Salin template profil agents bawaan ke home (tanpa menimpa kustom user). */
-function seedAgentTemplates(): void {
+function seedDirTemplates(pkgSubdir: string, destDir: string): void {
   try {
-    // Lokasi template: <pkg>/agents (dist/.. atau src/..), fallback cwd (dev).
+    // Lokasi template: <pkg>/agents atau <pkg>/skills (dist/.. atau src/..), fallback cwd (dev).
     const here = dirname(fileURLToPath(import.meta.url));
-    const candidates = [join(here, "..", "agents"), join(process.cwd(), "agents")];
+    const candidates = [join(here, "..", pkgSubdir), join(process.cwd(), pkgSubdir)];
     for (const src of candidates) {
       if (!existsSync(src)) continue;
       for (const f of readdirSync(src)) {
-        if (!f.endsWith(".md")) continue;
-        const dest = join(agentsDir(), f);
+        if (!f.endsWith(".md") && !f.endsWith(".json")) continue;
+        const dest = join(destDir, f);
         if (!existsSync(dest)) copyFileSync(join(src, f), dest);
       }
       break;
@@ -56,8 +72,12 @@ export function ensureHome(): string {
   mkdirSync(sessionsDir(), { recursive: true });
   mkdirSync(projectsDir(), { recursive: true });
   mkdirSync(agentsDir(), { recursive: true });
+  mkdirSync(skillsDir(), { recursive: true });
+  mkdirSync(todosDir(), { recursive: true });
+  mkdirSync(checkpointsDir(), { recursive: true });
   mkdirSync(logsDir(), { recursive: true });
-  seedAgentTemplates();
+  seedDirTemplates("agents", agentsDir());
+  seedDirTemplates("skills", skillsDir());
 
   // Migrasi sekali dari ~/.sabana-code/sessions (versi TUI awal)
   const marker = join(home, ".migrated");

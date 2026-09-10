@@ -29,6 +29,15 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
   anytime (`sabana-code -r <id>`).
 - **Custom sub-agents** — AI profiles in `~/sabana-code/agents/*.md` (e.g., reviewer, security auditor)
   for delegating specific tasks.
+- **Skills** — reusable work instructions in `~/sabana-code/skills/*.md` or
+  `<project>/.sabana/skills/*.md` (project overrides global). The agent auto-loads
+  matching skills via the `skill` tool (`/skills`, `/skill <name>`).
+- **MCP servers** — connect any Model Context Protocol server via `~/sabana-code/mcp.json`;
+  their tools appear as `mcp__<server>__<tool>` and work like built-in tools (`/mcp`, `/mcp reload`).
+- **Todo queue** — the agent plans multi-step work with `todo_write`/`todo_list`,
+  stored per project in `~/sabana-code/todos/` so the queue survives session switches (`/todo`).
+- **Checkpoint & rewind** — snapshot files + history before risky work
+  (`/checkpoint [label]`), restore any time (`/checkpoints`, `/rewind <id>`).
 - **Multi-provider & multi-model** — OpenAI, Anthropic, Google Gemini, Groq, Together,
   OpenRouter, Perplexity, local Ollama, or any OpenAI-compatible custom URL.
   Switch anytime without losing history; model list is fetched live from `/v1/models`.
@@ -65,6 +74,10 @@ On first run, `sabana-code` initializes the global home:
   sessions/<uuid>.json chat history + context per session
   projects/<hash>/     metadata per project folder (one project can have many sessions)
   agents/*.md          custom sub-agent profiles (reviewer, security, …)
+  skills/*.md          reusable work instructions (commit, review-pr, …)
+  mcp.json             MCP server configs (stdio)
+  todos/<hash>.json    todo queue per project
+  checkpoints/<uuid>/  file + history snapshots per session
   sabana.db            sqlite: session index, token usage
   logs/YYYY-MM-DD.log  daily activity logs
 ```
@@ -115,8 +128,16 @@ TUI commands:
 | `/compact` | compact current context (auto at >80% window) |
 | `/login <provider> <key>`, `/logout` | manage global credentials |
 | `/agents`, `/agent <name> <task>` | view & delegate to sub-agent |
+| `/skills`, `/skill <name>` | list skills & view one skill's instructions |
+| `/todo` | view project todo queue |
+| `/mcp [reload]` | MCP server status + tools |
+| `/checkpoint [label]`, `/checkpoints`, `/rewind <id>` | snapshot & restore files + history |
 | `/context` | active model context window usage |
 | `/tools`, `/clear`, `/quit` | list tools, clear screen, exit |
+
+Click any tool row to open a **fullscreen preview** (auto-detected syntax highlighting
+for code, unified diff for edits, full stdout/stderr for shell) — `Esc` to close,
+`↑↓`/`PgUp`/`PgDn` to scroll inside it.
 
 `Ctrl+C` cancels the running turn; `Ctrl+C` again to exit (session auto-saved).
 `↑`/`↓` scrolls chat history (3 lines), `PgUp`/`PgDn` scrolls one screen; send a new message to jump back to bottom.
@@ -174,6 +195,20 @@ The displayed list can be selected directly by number.
 
 Original environment variables always take precedence over `settings.json`, so values above can
 be overridden per-command, e.g. `SABANA_MODEL=gpt-4o sabana-code`.
+
+### MCP servers (`~/sabana-code/mcp.json`)
+
+```json
+{
+  "servers": {
+    "fetch": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-fetch"] }
+  }
+}
+```
+
+Each running server contributes its tools as `mcp__<server>__<tool>`. Check status with
+`/mcp`, reload after editing the file with `/mcp reload`. A server that fails to
+start is marked down and the agent keeps working without its tools.
 
 ## Security: guardrails & rate limiting
 

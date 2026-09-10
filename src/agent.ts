@@ -25,6 +25,11 @@ import {
 } from "./tools/filesystem.js";
 import { shellHandler, shellTool } from "./tools/terminal.js";
 import { webFetchHandler, webFetchTool, webSearchHandler, webSearchTool } from "./tools/web.js";
+import { skillHandler, skillTool, buildSkillsContext } from "./skills.js";
+import { todoListHandler, todoListTool, todoWriteHandler, todoWriteTool } from "./todo.js";
+import { McpManager } from "./mcp.js";
+import type { ToolDefinition } from "./tools/types.js";
+import type { ToolHandler } from "./tools/executor.js";
 import { PermissionEngine, type ApprovalState, type PermissionAsker } from "./utils/permissions.js";
 import { LoopDetector } from "./utils/loop.js";
 import { RateLimiter } from "./utils/ratelimit.js";
@@ -126,6 +131,8 @@ export class SingleAgent {
   private timeline: string[] = [];
   private abort: AbortController = new AbortController();
   private emit: AgentEventHandler;
+  private mcp = new McpManager();
+  private mcpLoaded = false;
 
   constructor(private config: AgentConfig) {
     this.provider = createProvider(config.provider, {
@@ -153,9 +160,49 @@ export class SingleAgent {
       shellTool,
       webSearchTool,
       webFetchTool,
+      skillTool,
+      todoWriteTool,
+      todoListTool,
     ]) {
       this.registry.register(t);
     }
+  }
+
+  /** Daftarkan tool dinamis (MCP). Idempoten per nama. */
+  registerDynamicTool(def: ToolDefinition, handler: ToolHandler): void {
+    this.registry.register(def);
+    this.executor.registerHandler(def.name, handler);
+  }
+
+  /** Muat tools MCP (sekali per instance). Gagal → warn, agent tetap jalan. */
+  async ensureMcpLoaded(): Promise<void> {
+    if (this.mcpLoaded) return;
+    this.mcpLoaded = true;
+    try {
+      const { tools, errors } = await this.mcp.ensureLoaded();
+      for (const def of tools) {
+        const handler = this.mcp.handlerFor(def.name);
+        if (handler) this.registerDynamicTool(def, handler);
+      }
+      if (tools.length > 0) this.timeline.push(`mcp: +${tools.length} tools`);
+      for (const e of errors) this.emit({ type: "warn", message: `MCP: ${e}` });
+    } catch (e) {
+      this.emit({ type: "warn", message: `MCP gagal dimuat: ${(e as Error).message}` });
+    }
+  }
+
+  /** Status server MCP (untuk /mcp di TUI). */
+  mcpStatus() {
+    return this.mcp.status();
+  }
+
+  async reloadMcp(): Promise<{ added: number; errors: string[] }> {
+    const { tools, errors } = await this.mcp.reload();
+    for (const def of tools) {
+      const handler = this.mcp.handlerFor(def.name);
+      if (handler) this.registerDynamicTool(def, handler);
+    }
+    return { added: tools.length, errors };
   }
 
   /** Ganti model/provider mid-session (bikin provider baru, riwayat tetap). */
@@ -273,13 +320,23 @@ export class SingleAgent {
     this.executor.registerHandler("shell", shellHandler(workspaceDir));
     this.executor.registerHandler("web_search", webSearchHandler());
     this.executor.registerHandler("web_fetch", webFetchHandler());
+    this.executor.registerHandler("skill", skillHandler(workspaceDir));
+    this.executor.registerHandler("todo_write", todoWriteHandler(workspaceDir));
+    this.executor.registerHandler("todo_list", todoListHandler(workspaceDir));
+
+    // Tools MCP (lazy, sekali per instance; gagal → warn, lanjut tanpa MCP).
+    await this.ensureMcpLoaded();
 
     let messages: ModelMessage[];
     if (history.length === 0) {
       const tree = await this.snapshotTree(workspaceDir);
+      const skillsCtx = buildSkillsContext(workspaceDir);
       messages = [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: buildInitialContext(userPrompt, workspaceDir, tree) },
+        {
+          role: "user",
+          content: buildInitialContext(userPrompt, workspaceDir, tree) + (skillsCtx ? `\n\n${skillsCtx}` : ""),
+        },
       ];
       log(`workspace: ${workspaceDir}`);
       log(`model: ${this.config.model} (${this.config.provider})`);

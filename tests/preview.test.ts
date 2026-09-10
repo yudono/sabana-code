@@ -112,6 +112,40 @@ describe("buildPreviewForTool", () => {
     assert.ok(pv.body.includes("boom"));
   });
 
+  it("shell: ANSI di-strip + tampilkan command", () => {
+    const ws = freshWs();
+    const pv = buildPreviewForTool(
+      {
+        name: "shell",
+        preview: ref("shell", { command: "npm test" }),
+        summary: "$ npm test",
+        output: JSON.stringify({ exitCode: 0, stdout: "\x1b[32mok\x1b[0m", stderr: "", durationMs: 10 }),
+      },
+      ws,
+    );
+    assert.ok(pv.body.includes("ok"));
+    assert.ok(!pv.body.includes("\x1b[32m"));
+  });
+
+  it("web_fetch tampil sebagai markdown", () => {
+    const ws = freshWs();
+    const pv = buildPreviewForTool(
+      { name: "web_fetch", preview: ref("web_fetch", { url: "https://x.test" }), summary: "fetch", output: "# Judul\nisi" },
+      ws,
+    );
+    assert.equal(pv.lang, "md");
+  });
+
+  it("file python terdeteksi py (bukan code generik)", () => {
+    const ws = freshWs();
+    writeFileSync(join(ws, "main.py"), "def f():\n    pass\n");
+    const pv = buildPreviewForTool(
+      { name: "read_file", preview: ref("read_file", { path: "main.py" }), summary: "read_file main.py" },
+      ws,
+    );
+    assert.equal(pv.lang, "py");
+  });
+
   it("tool lain fallback ke output mentah", () => {
     const ws = freshWs();
     const pv = buildPreviewForTool(

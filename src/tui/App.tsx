@@ -22,6 +22,9 @@ import { createMouseParser, stripMouseSequences } from "./mouse.js";
 import { buildPreviewForTool } from "./preview.js";
 import type { PermissionAsker, PermissionRequest, AskerVerdict } from "../utils/permissions.js";
 import { listAgents, loadAgent, runSubAgent } from "../subagents.js";
+import { listSkills, loadSkill } from "../skills.js";
+import { formatTodos, loadTodos } from "../todo.js";
+import { createCheckpoint, listCheckpoints, rewindToCheckpoint } from "../checkpoint.js";
 import { contextUsage } from "../session/context.js";
 import { flog } from "../utils/filelog.js";
 import {
@@ -871,6 +874,119 @@ interface PreviewState {
               "Pilih: /models <nomor|nama persis>  atau ketik /models saja untuk dropdown",
             ].join("\n"),
           });
+          break;
+        }
+        case "skills": {
+          const list = listSkills(workspaceDir);
+          if (list.length === 0)
+            push({ kind: "info", tone: "dim", text: "Belum ada skill. Buat *.md di ~/sabana-code/skills/ atau <project>/.sabana/skills/ (frontmatter name/description)." });
+          else
+            push({
+              kind: "info",
+              tone: "dim",
+              text: ["Skills:", ...list.map((s) => `  ${s.name} — ${s.description} [${s.scope}]`), "Lihat isi: /skill <nama>"].join("\n"),
+            });
+          break;
+        }
+        case "skill": {
+          const sname = (args[0] || "").toLowerCase();
+          if (!sname) {
+            push({ kind: "info", tone: "red", text: "Pakai: /skill <nama>" });
+            break;
+          }
+          const s = loadSkill(sname, workspaceDir);
+          if (!s) {
+            push({ kind: "info", tone: "red", text: `Skill '${sname}' tidak ada. /skills untuk daftar.` });
+            break;
+          }
+          const body = s.instructions.length > 3000 ? s.instructions.slice(0, 3000) + "\n…(dipotong)" : s.instructions;
+          push({ kind: "info", tone: "dim", text: `Skill ${s.name} [${s.scope}] — ${s.description}\n\n${body}` });
+          break;
+        }
+        case "todo": {
+          const list = loadTodos(workspaceDir);
+          const done = list.items.filter((t) => t.status === "completed").length;
+          push({
+            kind: "info",
+            tone: "dim",
+            text: `Todo (${done}/${list.items.length} selesai):\n${formatTodos(list.items)}`,
+          });
+          break;
+        }
+        case "mcp": {
+          if ((args[0] || "").toLowerCase() === "reload") {
+            push({ kind: "info", tone: "dim", text: "Memuat ulang MCP…" });
+            try {
+              const r = await agent.reloadMcp();
+              push({
+                kind: "info",
+                tone: r.errors.length > 0 ? "yellow" : "green",
+                text: `MCP reload: +${r.added} tools${r.errors.length > 0 ? `\nGagal: ${r.errors.join("; ")}` : ""}`,
+              });
+            } catch (e) {
+              push({ kind: "info", tone: "red", text: `MCP reload gagal: ${(e as Error).message}` });
+            }
+          }
+          const st = agent.mcpStatus();
+          if (st.length === 0)
+            push({ kind: "info", tone: "dim", text: "Belum ada server MCP. Tambahkan di ~/sabana-code/mcp.json lalu /mcp reload." });
+          else
+            push({
+              kind: "info",
+              tone: "dim",
+              text: [
+                "MCP:",
+                ...st.map((s) =>
+                  s.state === "up"
+                    ? `  ● ${s.name} — ${s.tools.length} tools`
+                    : `  ○ ${s.name} — down${s.error ? `: ${s.error.slice(0, 120)}` : ""}`,
+                ),
+              ].join("\n"),
+            });
+          break;
+        }
+        case "checkpoint": {
+          const label = args.join(" ").trim();
+          const cp = createCheckpoint(sess, workspaceDir, label || undefined);
+          push({ kind: "info", tone: "green", text: `Checkpoint tersimpan: ${cp.id.slice(0, 8)} "${cp.label}" (${cp.files.length} file, ${cp.messages.length} pesan). Mundur: /rewind ${cp.id.slice(0, 8)}` });
+          break;
+        }
+        case "checkpoints": {
+          const list = listCheckpoints(sess.id);
+          if (list.length === 0) push({ kind: "info", tone: "dim", text: "Belum ada checkpoint di session ini. Buat: /checkpoint [label]" });
+          else
+            push({
+              kind: "info",
+              tone: "dim",
+              text: ["Checkpoints:", ...list.map((c) => `  ${c.id.slice(0, 8)}  "${c.label}"  ${c.files} file  ${c.messages} pesan`), "Mundur: /rewind <id>"].join("\n"),
+            });
+          break;
+        }
+        case "rewind": {
+          const id = args[0];
+          if (!id) {
+            push({ kind: "info", tone: "red", text: "Pakai: /rewind <id> (lihat /checkpoints)" });
+            break;
+          }
+          if (runningRef.current) {
+            push({ kind: "info", tone: "yellow", text: "Tunggu turn selesai dulu." });
+            break;
+          }
+          const { session: next, result } = rewindToCheckpoint(sess, workspaceDir, id);
+          if (!result.ok) {
+            push({ kind: "info", tone: "red", text: result.error || "Rewind gagal." });
+            break;
+          }
+          persist(next);
+          setCutoff(itemsRef.current.length + 1);
+          setScrollOffset(0);
+          for (const it of rebuildItems(next.messages)) push(it);
+          const bits = [
+            `${result.restored.length} file dikembalikan`,
+            ...(result.deleted.length > 0 ? [`${result.deleted.length} file dihapus`] : []),
+            ...(result.skipped.length > 0 ? [`${result.skipped.length} dilewati`] : []),
+          ];
+          push({ kind: "info", tone: "green", text: `Mundur ke checkpoint ${id}: ${bits.join(", ")}. Riwayat: ${next.messages.length} pesan.` });
           break;
         }
         case "compact": {

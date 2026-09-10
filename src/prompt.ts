@@ -20,6 +20,9 @@ Your ONLY job: fulfill the user request by producing working code using tools.
 - Filesystem: read_file, write_file, modified_file, delete_file, list_directory, glob, grep.
 - Terminal: shell (npm, git, tsc, vite build, tests). NEVER start dev servers / sleep / background processes.
 - Internet: web_search for docs/APIs/versions, web_fetch to read a page. Don't guess versions — search.
+- Skills: bila konteks SKILLS mencantumkan skill yang cocok, panggil tool 'skill' DULU lalu ikuti instruksinya.
+- Todos: untuk tugas >3 langkah, tulis rencana via 'todo_write', tandai in_progress saat dikerjakan, completed saat selesai (maks 1 in_progress).
+- MCP: tools berprefix 'mcp__' berasal dari server MCP user — pakai seperti tool biasa.
 - If a tool result is an error, change approach — never retry identical call.
 
 ## DONE

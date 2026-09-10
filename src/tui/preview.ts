@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { safePath } from "../tools/sandbox.js";
-import { detectLang, type HlLang } from "./highlight.js";
+import { detectLangFromContent, stripAnsi, type HlLang } from "./highlight.js";
 import type { PreviewRef } from "./App.js";
 
 export interface PreviewData {
@@ -90,7 +90,7 @@ export function buildPreviewForTool(
         const fb = storedFallback(path, item.output);
         return { title, lang: "plain", body: cap(`${r.error}${fb ? `\n\n--- output tersimpan ---\n${fb}` : ""}`) };
       }
-      return { title, lang: detectLang(path), body: cap(withLineNumbers(r.content)) };
+      return { title, lang: detectLangFromContent(path, r.content), body: cap(withLineNumbers(r.content)) };
     }
 
     case "modified_file": {
@@ -136,15 +136,43 @@ export function buildPreviewForTool(
               (typeof r.durationMs === "number" ? ` · ${r.durationMs}ms` : ""),
           );
         }
-        if (typeof r.stdout === "string" && r.stdout) lines.push(`--- stdout ---\n${r.stdout}`);
-        if (typeof r.stderr === "string" && r.stderr) lines.push(`--- stderr ---\n${r.stderr}`);
-        if (typeof r.error === "string" && r.error) lines.push(`ERROR: ${r.error}`);
+        if (typeof r.stdout === "string" && r.stdout) lines.push(`--- stdout ---\n${stripAnsi(r.stdout)}`);
+        if (typeof r.stderr === "string" && r.stderr) lines.push(`--- stderr ---\n${stripAnsi(r.stderr)}`);
+        if (typeof r.error === "string" && r.error) lines.push(`ERROR: ${stripAnsi(r.error)}`);
       } else if (typeof p === "string" && p) {
-        lines.push(p);
+        lines.push(stripAnsi(p));
       } else {
         lines.push("(tidak ada output tersimpan)");
       }
       return { title, lang: "plain", body: cap(lines.join("\n")) };
+    }
+
+    case "web_fetch": {
+      const p = parseStored(item.output);
+      const body =
+        p === undefined
+          ? "(tidak ada output tersimpan)"
+          : typeof p === "string"
+            ? p
+            : typeof (p as { content?: unknown }).content === "string"
+              ? ((p as { content: string }).content as string)
+              : JSON.stringify(p, null, 2);
+      return { title: item.summary || name, lang: "md", body: cap(body) };
+    }
+
+    case "web_search":
+    case "glob":
+    case "grep":
+    case "list_directory": {
+      const p = parseStored(item.output);
+      const body =
+        p === undefined
+          ? "(tidak ada output tersimpan)"
+          : typeof p === "string"
+            ? p
+            : JSON.stringify(p, null, 2);
+      const looksJson = body.trimStart().startsWith("{") || body.trimStart().startsWith("[");
+      return { title: item.summary || name, lang: looksJson ? "json" : "plain", body: cap(body) };
     }
 
     default: {

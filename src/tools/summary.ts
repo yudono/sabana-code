@@ -65,7 +65,21 @@ export function summarizeCall(name: string, args: Record<string, unknown>): stri
     }
     case "web_fetch":
       return `fetch ${oneLine(str(args.url), 100)}`;
+    case "skill":
+      return `skill ${oneLine(str(args.name), 60)}`;
+    case "todo_write": {
+      const list = Array.isArray(args.todos) ? (args.todos as unknown[]) : [];
+      return `todo_write ${list.length} item`;
+    }
+    case "todo_list":
+      return "todo_list";
     default: {
+      if (name.startsWith("mcp__")) {
+        const parts = name.split("__");
+        const label = parts.length >= 3 ? `mcp:${parts[1]}/${parts.slice(2).join("__")}` : name;
+        const first = Object.entries(args).find(([, v]) => typeof v === "string" || typeof v === "number");
+        return first ? `${label} ${oneLine(String(first[1]), 60)}` : label;
+      }
       const first = Object.entries(args).find(([, v]) => typeof v === "string" || typeof v === "number");
       return first ? `${name} ${oneLine(String(first[1]), 80)}` : name;
     }
@@ -143,6 +157,20 @@ export function summarizeResult(name: string, r: ToolOutcome): string | null {
     case "web_fetch": {
       const n = num("length");
       return n === null ? null : `+${fmtBytes(n)} char`;
+    }
+    case "skill":
+      return asObj(r.output) && typeof (asObj(r.output) as Record<string, unknown>).name === "string"
+        ? `skill ${(asObj(r.output) as Record<string, unknown>).name}`
+        : null;
+    case "todo_write": {
+      const t = num("total");
+      const d = num("completed");
+      return t === null ? null : `${d ?? 0}/${t} selesai`;
+    }
+    case "todo_list": {
+      const t = num("total");
+      const d = num("completed");
+      return t === null ? null : `${d ?? 0}/${t} selesai`;
     }
     default:
       return null;

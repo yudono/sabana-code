@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { detectLang, highlight } from "../src/tui/highlight.js";
+import { detectLang, detectLangFromContent, highlight, stripAnsi } from "../src/tui/highlight.js";
 
 describe("detectLang", () => {
   it("ekstensi umum", () => {
@@ -8,9 +8,31 @@ describe("detectLang", () => {
     assert.equal(detectLang("a.json"), "json");
     assert.equal(detectLang("run.sh"), "sh");
     assert.equal(detectLang("README.md"), "md");
-    assert.equal(detectLang("main.py"), "code");
+    assert.equal(detectLang("main.py"), "py");
+    assert.equal(detectLang("main.go"), "go");
+    assert.equal(detectLang("lib.rs"), "rust");
+    assert.equal(detectLang("app.yaml"), "yaml");
+    assert.equal(detectLang("index.html"), "html");
+    assert.equal(detectLang("a.css"), "css");
+    assert.equal(detectLang("q.sql"), "sql");
     assert.equal(detectLang("notes.txt"), "plain");
     assert.equal(detectLang("Dockerfile"), "sh");
+    assert.equal(detectLang("Makefile"), "sh");
+  });
+
+  it("konten: shebang & json & yaml & html", () => {
+    assert.equal(detectLangFromContent("bin/jalan", "#!/usr/bin/env python3\nprint(1)\n"), "py");
+    assert.equal(detectLangFromContent("bin/jalan", "#!/bin/bash\necho hi\n"), "sh");
+    assert.equal(detectLangFromContent("data", '{"a": 1}'), "json");
+    assert.equal(detectLangFromContent("cfg", "---\nname: x\n"), "yaml");
+    assert.equal(detectLangFromContent("page", "<!doctype html><html>"), "html");
+    // Path spesifik menang atas konten.
+    assert.equal(detectLangFromContent("a.py", "hello"), "py");
+  });
+
+  it("stripAnsi buang escape shell", () => {
+    assert.equal(stripAnsi("\x1b[32mok\x1b[0m\n"), "ok\n");
+    assert.equal(stripAnsi("plain"), "plain");
   });
 });
 
@@ -60,6 +82,18 @@ describe("highlight json/md/sh", () => {
   it("sh: komentar abu, keyword sh", () => {
     const [l] = highlight("# komen", "sh");
     assert.equal(l[0].color, "gray");
+  });
+
+  it("py/go/rust: keyword + komentar", () => {
+    const [py] = highlight("def f(): # halo", "py");
+    assert.ok(py.some((s) => s.text === "def" && s.color === "magenta"));
+    assert.ok(py.some((s) => s.text === "# halo" && s.color === "gray"));
+    const [go] = highlight("func main() {", "go");
+    assert.ok(go.some((s) => s.text === "func" && s.color === "magenta"));
+    const [rs] = highlight("fn main() { // hi", "rust");
+    assert.ok(rs.some((s) => s.text === "fn" && s.color === "magenta"));
+    const [sql] = highlight("select * from t", "sql");
+    assert.ok(sql.some((s) => s.text === "select" && s.color === "magenta"));
   });
 
   it("plain: tanpa warna", () => {

@@ -16,6 +16,7 @@ import {
   type ProviderConfig,
 } from "./settings.js";
 import { flog } from "./utils/filelog.js";
+import { ensureMcpConfigSeed } from "./mcp.js";
 
 function ask(rl: readline.Interface, q: string): Promise<string> {
   return new Promise((res) => rl.question(q, (a) => res(a.trim())));
@@ -109,6 +110,7 @@ export async function runSetupWizard(): Promise<SettingsFile> {
 export async function ensureInitialized(): Promise<SettingsFile> {
   ensureHome();
   getDb(); // pastikan sabana.db + tabel ada
+  ensureMcpConfigSeed(); // buat ~/sabana-code/mcp.json contoh bila belum ada
   let s = loadSettings();
   if (!isSettingsComplete(s)) {
     if (!process.stdin.isTTY) {
