@@ -80,4 +80,20 @@ describe("checkpoint & rewind", () => {
     assert.equal(result.ok, false);
     assert.ok(result.error?.includes("tidak ditemukan"));
   });
+
+  it("file biner di-skip (tidak dihapus saat rewind)", () => {
+    isolatedHome();
+    const w = mkdtempSync(join(tmpdir(), "sc-cpws-"));
+    writeFileSync(join(w, "bin.dat"), Buffer.from([0x00, 0x01, 0x02, 0x41]));
+    const s = sess(w);
+    s.filesModified = ["bin.dat"];
+    const cp = createCheckpoint(s, w);
+    // Ubah biner setelah checkpoint → rewind tidak boleh menyentuh/diubah.
+    writeFileSync(join(w, "bin.dat"), Buffer.from([0x00, 0x09, 0x09]));
+    const { result } = rewindToCheckpoint({ ...s, messages: s.messages }, w, cp.id);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.restored, []);
+    assert.deepEqual(result.skipped, ["bin.dat"]);
+    assert.deepEqual([...readFileSync(join(w, "bin.dat"))], [0x00, 0x09, 0x09]);
+  });
 });

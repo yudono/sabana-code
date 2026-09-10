@@ -13,6 +13,8 @@ export interface FileSnapshot {
   path: string;
   /** null = file belum ada saat checkpoint (akan dihapus saat rewind). */
   content: string | null;
+  /** true = file ada tapi tak terbaca (biner/terlalu besar) → rewind TIDAK menyentuhnya. */
+  skipped?: boolean;
 }
 
 export interface Checkpoint {
@@ -36,15 +38,16 @@ function sessionDir(sessionId: string): string {
   return d;
 }
 
-function readText(full: string): string | null {
+function readText(full: string): { content: string | null; skipped: boolean } {
   try {
-    if (!existsSync(full)) return null;
+    if (!existsSync(full)) return { content: null, skipped: false };
     const buf = readFileSync(full);
-    if (buf.length > MAX_FILE_BYTES) return null; // terlalu besar → lewati (tidak di-restore)
-    if (buf.includes(0)) return null; // biner → lewati
-    return buf.toString("utf-8");
+    // Terlalu besar / biner → lewati total (jangan di-restore, JANGAN dihapus).
+    if (buf.length > MAX_FILE_BYTES) return { content: null, skipped: true };
+    if (buf.includes(0)) return { content: null, skipped: true };
+    return { content: buf.toString("utf-8"), skipped: false };
   } catch {
-    return null;
+    return { content: null, skipped: true };
   }
 }
 
@@ -56,7 +59,8 @@ export function createCheckpoint(session: Session, workspaceDir: string, label?:
   for (const rel of session.filesModified.slice(0, MAX_FILES)) {
     const full = safePath(workspaceDir, rel);
     if (!full) continue; // di luar workspace → lewati
-    files.push({ path: rel, content: readText(full) });
+    const r = readText(full);
+    files.push({ path: rel, content: r.content, ...(r.skipped ? { skipped: true as const } : {}) });
   }
   const cp: Checkpoint = {
     id,
@@ -140,6 +144,11 @@ export function rewindToCheckpoint(session: Session, workspaceDir: string, id: s
   for (const snap of cp.files) {
     const full = safePath(workspaceDir, snap.path);
     if (!full) {
+      skipped.push(snap.path);
+      continue;
+    }
+    // File yang di-skip saat snapshot (biner/raksasa) → jangan sentuh sama sekali.
+    if (snap.skipped) {
       skipped.push(snap.path);
       continue;
     }

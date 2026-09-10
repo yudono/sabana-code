@@ -76,6 +76,27 @@ interface McpToolDesc {
   inputSchema?: Record<string, unknown>;
 }
 
+// ─── Jangan tinggalkan server yatim: bunuh semua child saat proses keluar ───
+const LIVE_CLIENTS = new Set<McpClient>();
+let exitHookInstalled = false;
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  const killAll = () => {
+    for (const c of LIVE_CLIENTS) {
+      try {
+        c.stop();
+      } catch {
+        /* abaikan */
+      }
+    }
+  };
+  process.once("exit", killAll);
+  process.once("SIGINT", () => {
+    killAll();
+  });
+}
+
 /** Satu koneksi stdio ke server MCP (NDJSON: 1 objek JSON per baris). */
 export class McpClient {
   private proc: ChildProcess | null = null;
@@ -107,6 +128,8 @@ export class McpClient {
     });
     // Jangan biarkan proses zombie menggantung test/runner.
     proc.unref?.();
+    LIVE_CLIENTS.add(this);
+    installExitHook();
     const initP = (async () => {
       await this.request("initialize", {
         protocolVersion: "2024-11-05",
@@ -195,6 +218,7 @@ export class McpClient {
       p.reject(new Error(`MCP server '${this.name}' dihentikan`));
     }
     this.pending.clear();
+    LIVE_CLIENTS.delete(this);
     try {
       this.proc?.kill();
     } catch {
@@ -221,7 +245,6 @@ export class McpManager {
   private clients = new Map<string, McpClient>();
   private toolToServer = new Map<string, { server: string; tool: string; client: McpClient }>();
   private statuses: McpServerStatus[] = [];
-  private loaded = false;
 
   /** Idempoten: server yang sudah up tidak di-start ulang. */
   async ensureLoaded(): Promise<{ tools: ToolDefinition[]; errors: string[] }> {
@@ -268,10 +291,7 @@ export class McpManager {
         this.clients.delete(name);
       }
     }
-    // Status server yang dimatikan total (tak ada di config).
     this.statuses = statuses;
-    this.loaded = true;
-    void this.loaded;
     return { tools: defs, errors };
   }
 
