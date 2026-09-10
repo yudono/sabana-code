@@ -220,13 +220,23 @@ start is marked down and the agent keeps working without its tools.
   429/quota/5xx/timeout errors are retried automatically with exponential backoff.
 - **Sandbox path**: filesystem tools can only access the workspace (`safePath`);
   `shell` commands that hang the loop (dev servers, `sleep`, background `&`) are blocked.
+- **sabana-sandbox** (`src/sabana-sandbox.ts`): every `shell` command runs through a
+  double filter — your inline approval (`y`/`a`/`n`) PLUS a static policy + workspace
+  containment that approval cannot override. Always blocked: `rm -rf /` (or `~`,
+  `$HOME`), paths outside the workspace (including `cd / && rm -rf .` escapes),
+  `sudo`/`su`, `mkfs`/`dd`-to-device, fork bombs, `curl … | sh`, heredocs into a
+  shell, and redirects outside the workspace. Legal in-workspace work
+  (`rm -rf .next`, `npm install`, `> out.log`, `2>&1`) still runs. A block shows
+  `SANDBOX BLOCKED` and never executes — rewrite the command to stay inside
+  the workspace.
 - Tool permissions: file (read/write/edit/list) and read-only shell (`ls`, `cd`,
   `cat`, `echo`, …) run without prompts. Only potentially dangerous execution (`rm`,
   `mkdir`, `npm`, `git`, …) requires inline approval — `[y]` once,
   `[a]` all similar commands (e.g., approve `npm` once → all `npm …` pass),
   `[n]` deny. `allow all`/`deny` decisions are saved in the session file
   (`~/sabana-code/sessions/<uuid>.json`), so they persist for that session only;
-  new sessions start with fresh approvals.
+  new sessions start with fresh approvals. If you denied something by mistake,
+  start a new session (`/new`) — denials are never carried over.
 
 ## For Developers
 

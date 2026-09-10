@@ -1,11 +1,15 @@
 // ─── Terminal tool — port dari sabana-dev tools/built-in/tools.ts (shell) ───
-import { execSync } from "node:child_process";
+// Dieksekusi lewat sabana-sandbox (src/sabana-sandbox.ts): filter ganda —
+// izin user (y/a/n) + kebijakan statis + kurungan workspace. `rm -rf /`,
+// sudo, curl|sh, dan path keluar workspace SELALU diblokir (tak bisa di-approve).
 import type { ToolDefinition } from "./types.js";
 import { safePath } from "./sandbox.js";
+import { runSandboxed } from "../sabana-sandbox.js";
 
 export const shellTool: ToolDefinition = {
   name: "shell",
-  description: "Jalankan perintah shell di workspace. Mengembalikan exitCode, stdout, stderr.",
+  description:
+    "Jalankan perintah shell di workspace via sabana-sandbox (kurungan workspace + blocklist). Mengembalikan exitCode, stdout, stderr.",
   inputSchema: {
     type: "object",
     properties: {
@@ -23,38 +27,27 @@ export const shellTool: ToolDefinition = {
 
 export function shellHandler(workspaceDir: string) {
   return async (args: Record<string, unknown>) => {
-    let command = args.command as string;
-    command = command
-      .replace(/^\s*cd\s+sandbox\s*(?:&&|;)?\s*/, "")
-      .replace(/\bsandbox\//g, "./");
-    const cwd = safePath(workspaceDir, (args.cwd as string) || ".");
+    const command = args.command as string;
+    const rel = (args.cwd as string) || ".";
+    const cwd = safePath(workspaceDir, rel);
     if (!cwd) return { error: "Path escapes workspace", denied: true };
     const timeout = (args.timeout as number) || 120_000;
     const maxLines = (args.maxOutputLines as number) || 200;
-    const start = Date.now();
-    try {
-      const out = execSync(command, {
-        cwd,
-        encoding: "utf-8",
-        timeout,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, CI: "true", npm_config_yes: "true", HOME: process.env.HOME },
-      });
-      const lines = out.split("\n");
+    const r = await runSandboxed(command, workspaceDir, { timeoutMs: timeout, cwd: rel });
+    if (r.blocked) {
       return {
-        exitCode: 0,
-        stdout: lines.length > maxLines ? lines.slice(0, maxLines).join("\n") + `\n... (${lines.length - maxLines} more)` : out,
-        stderr: "",
-        durationMs: Date.now() - start,
-      };
-    } catch (e) {
-      const err = e as { status?: number; stdout?: string; stderr?: string; message?: string };
-      return {
-        exitCode: err.status ?? 1,
-        stdout: (err.stdout || "").slice(0, 10_000),
-        stderr: (err.stderr || err.message || "").slice(0, 10_000),
-        durationMs: Date.now() - start,
+        error:
+          `SANDBOX BLOCKED: ${r.blocked}\n` +
+          `Perintah tidak dieksekusi sama sekali dan tak bisa di-approve. Tulis ulang agar di dalam workspace (${workspaceDir}).`,
+        blocked: true,
       };
     }
+    const lines = r.stdout.split("\n");
+    return {
+      exitCode: r.exitCode,
+      stdout: lines.length > maxLines ? lines.slice(0, maxLines).join("\n") + `\n... (${lines.length - maxLines} more)` : r.stdout,
+      stderr: r.stderr.slice(0, 10_000),
+      durationMs: r.durationMs,
+    };
   };
 }

@@ -19,6 +19,10 @@ Your ONLY job: fulfill the user request by producing working code using tools.
 ## TOOL POLICY
 - Filesystem: read_file, write_file, modified_file, delete_file, list_directory, glob, grep.
 - Terminal: shell (npm, git, tsc, vite build, tests). NEVER start dev servers / sleep / background processes.
+- sabana-sandbox: SEMUA perintah shell lewat sandbox — path harus di dalam workspace,
+  'rm -rf /', sudo, curl|sh, heredoc-ke-shell SELALU diblokir (tak bisa di-approve).
+  Bila hasil tool SANDBOX BLOCKED atau Permission denied: JANGAN retry perintah serupa,
+  tulis ulang perintahnya atau lanjutkan dengan cara lain.
 - Internet: web_search for docs/APIs/versions, web_fetch to read a page. Don't guess versions — search.
 - Skills: bila konteks SKILLS mencantumkan skill yang cocok, panggil tool 'skill' DULU lalu ikuti instruksinya.
 - Todos: untuk tugas >3 langkah, tulis rencana via 'todo_write', tandai in_progress saat dikerjakan, completed saat selesai (maks 1 in_progress).

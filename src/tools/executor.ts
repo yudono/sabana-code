@@ -1,7 +1,7 @@
 // ─── Tool executor — diadaptasi dari sabana-dev apps/api/src/agents/tools/executor.ts ───
 import type { ToolCall, ToolResult } from "./types.js";
 import type { ToolRegistry } from "./registry.js";
-import type { PermissionEngine } from "../utils/permissions.js";
+import { permissionKey, type PermissionEngine } from "../utils/permissions.js";
 
 export type ToolHandler = (
   args: Record<string, unknown>,
@@ -46,7 +46,14 @@ export class ToolExecutor {
     const command = call.name === "shell" ? (call.args.command as string) : undefined;
     const decision = await this.permissions.check(call.name, call.args, tool.riskLevel, command, signal);
     if (decision === "deny") {
-      return fail({ error: `Permission denied: ${call.name}${command ? ` (${command})` : ""}` });
+      // Sebutkan kunci izinnya agar user/LLM paham: tolak berlaku per session.
+      // Jangan di-retry — model harus ganti cara atau minta user (session baru me-reset).
+      const { key } = permissionKey(call.name, call.args, command);
+      return fail({
+        error:
+          `Permission denied: ${call.name}${command ? ` (${command})` : ""} [${key} ditolak untuk session ini — ` +
+          `JANGAN ulangi perintah serupa; lanjutkan dengan cara lain atau minta user me-reset via session baru]`,
+      });
     }
 
     if (call.name === "shell" && typeof call.args.command === "string") {
