@@ -1,6 +1,6 @@
 {
   "name": "sabana-code",
-  "version": "0.1.5",
+  "version": "0.1.4",
   "description": "Single-agent coding CLI seperti claude-code / opencode — diadaptasi dari logic sabana-dev",
   "type": "module",
   "bin": {
