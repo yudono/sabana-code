@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { helpText, parseCommand } from "../src/tui/commands.js";
+import { previewKeyAction } from "../src/tui/App.js";
 import { setMockPlan } from "../src/llm/mock.js";
 import { SingleAgent } from "../src/agent.js";
 import { mkdtempSync } from "node:fs";
@@ -27,6 +28,28 @@ describe("slash commands", () => {
     for (const c of ["model ", "provider "]) {
       assert.ok(!h.includes(`/${c}`), `help masih memuat perintah lama /${c}`);
     }
+  });
+});
+
+describe("preview key handling (regresi: Esc harus selalu menutup)", () => {
+  it("Esc → close", () => {
+    assert.equal(previewKeyAction("", { escape: true }), "close");
+  });
+
+  it("Ctrl+C → close", () => {
+    assert.equal(previewKeyAction("c", { ctrl: true }), "close");
+  });
+
+  it("panah/PgUp/PgDn → scroll", () => {
+    assert.equal(previewKeyAction("", { upArrow: true }), "up");
+    assert.equal(previewKeyAction("", { downArrow: true }), "down");
+    assert.equal(previewKeyAction("", { pageUp: true }), "pageup");
+    assert.equal(previewKeyAction("", { pageDown: true }), "pagedown");
+  });
+
+  it("tombol lain → null (diabaikan)", () => {
+    assert.equal(previewKeyAction("a", {}), null);
+    assert.equal(previewKeyAction("", { return: true }), null);
   });
 });
 

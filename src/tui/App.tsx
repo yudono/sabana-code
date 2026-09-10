@@ -235,6 +235,32 @@ function wrapRows(s: string, w: number): number {
   return s.split("\n").reduce((n, ln) => n + Math.max(1, Math.ceil(cellWidth(ln) / ww)), 0);
 }
 
+export interface PreviewKey {
+  ctrl?: boolean;
+  escape?: boolean;
+  upArrow?: boolean;
+  downArrow?: boolean;
+  return?: boolean;
+  pageUp?: boolean;
+  pageDown?: boolean;
+}
+
+export type PreviewKeyAction = "close" | "up" | "down" | "pageup" | "pagedown" | null;
+
+/**
+ * Tombol saat preview fullscreen terbuka → aksi. Pure agar bisa di-unit-test.
+ * Esc SELALU menutup (tidak ada pengecualian state lain) — regresi bug Esc mati.
+ */
+export function previewKeyAction(inp: string, key: PreviewKey): PreviewKeyAction {
+  if (key.escape) return "close";
+  if (key.ctrl && inp === "c") return "close";
+  if (key.upArrow) return "up";
+  if (key.downArrow) return "down";
+  if (key.pageUp) return "pageup";
+  if (key.pageDown) return "pagedown";
+  return null;
+}
+
 /** Tampilkan prompt asli, bukan blob konteks awal.
  *  Bentuk blob: "## USER REQUEST\n<prompt>\n\n## WORKSPACE\n...".
  *  Hanya bagian prompt yang ditampilkan; section berikutnya dipotong. */
@@ -474,7 +500,6 @@ interface PreviewState {
   // ── Pratinjau fullscreen baris tool (klik → buka, Esc → tutup) ──
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewScroll, setPreviewScroll] = useState(0);
-  const previewRef = useRef<PreviewState | null>(null);
   const rowMapRef = useRef<Array<{ y0: number; y1: number; id: string }>>([]);
   const lastMouseAt = useRef(0);
   const openPreviewRef = useRef<(id: string) => void>(() => {});
@@ -1370,28 +1395,27 @@ interface PreviewState {
         // Artefak escape dari sequence mouse (klik ditangani parser sendiri).
         if (key.escape && Date.now() - lastMouseAt.current < 120) return;
         // Pratinjau fullscreen: Esc/Ctrl+C menutup; panah scroll; lainnya abaikan.
-        if (previewRef.current) {
-          if (key.escape) {
+        // (pakai state `preview` langsung — closure ini dibuat ulang tiap render,
+        // jadi selalu segar; ref terpisah rawan lupa di-sync dan bikin Esc mati.)
+        if (preview) {
+          const act = previewKeyAction(inp, key);
+          if (act === "close") {
             closePreview();
             return;
           }
-          if (key.ctrl && inp === "c") {
-            closePreview();
-            return;
-          }
-          if (key.upArrow) {
+          if (act === "up") {
             setPreviewScroll((s) => Math.max(0, s - SCROLL_STEP));
             return;
           }
-          if (key.downArrow) {
+          if (act === "down") {
             setPreviewScroll((s) => s + SCROLL_STEP);
             return;
           }
-          if (key.pageUp) {
+          if (act === "pageup") {
             setPreviewScroll((s) => Math.max(0, s - previewAvail));
             return;
           }
-          if (key.pageDown) {
+          if (act === "pagedown") {
             setPreviewScroll((s) => s + previewAvail);
             return;
           }
