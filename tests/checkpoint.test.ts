@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCheckpoint, listCheckpoints, rewindToCheckpoint } from "../src/checkpoint.js";
+import { createCheckpoint, listCheckpoints, pairPromptCheckpoints, rewindToCheckpoint } from "../src/checkpoint.js";
 import { createSession, type Session } from "../src/session/store.js";
 import { closeDb } from "../src/db.js";
 
@@ -95,5 +95,38 @@ describe("checkpoint & rewind", () => {
     assert.deepEqual(result.restored, []);
     assert.deepEqual(result.skipped, ["bin.dat"]);
     assert.deepEqual([...readFileSync(join(w, "bin.dat"))], [0x00, 0x09, 0x09]);
+  });
+});
+describe("pairPromptCheckpoints (right-click revert)", () => {
+  const cps = (labels: string[]) => labels.map((label, i) => ({ id: `cp${i}`, label, createdAt: `2026-01-0${i + 1}T00:00:00.000Z` }));
+
+  it("pairs prompts to checkpoints in order", () => {
+    const m = pairPromptCheckpoints(["alpha", "beta"], cps(["alpha", "beta"]));
+    assert.equal(m.get(0), "cp0");
+    assert.equal(m.get(1), "cp1");
+  });
+
+  it("duplicate texts pair in order (1st → 1st)", () => {
+    const m = pairPromptCheckpoints(["same", "same"], cps(["same", "same"]));
+    assert.equal(m.get(0), "cp0");
+    assert.equal(m.get(1), "cp1");
+  });
+
+  it("sub-agent messages never get checkpoints", () => {
+    const m = pairPromptCheckpoints(["[sub-agent reviewer] check", "real"], cps(["real"]));
+    assert.equal(m.has(0), false);
+    assert.equal(m.get(1), "cp0");
+  });
+
+  it("pruned prompts get no pair", () => {
+    const m = pairPromptCheckpoints(["gone", "here"], cps(["here"]));
+    assert.equal(m.has(0), false);
+    assert.equal(m.get(1), "cp0");
+  });
+
+  it("labels truncate at 80 chars like createCheckpoint", () => {
+    const long = "x".repeat(100);
+    const m = pairPromptCheckpoints([long], cps([long.slice(0, 80)]));
+    assert.equal(m.get(0), "cp0");
   });
 });

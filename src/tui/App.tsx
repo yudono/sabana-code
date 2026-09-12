@@ -25,7 +25,7 @@ import type { PermissionAsker, PermissionRequest, AskerVerdict } from "../utils/
 import { listAgents, loadAgent, runSubAgent } from "../subagents.js";
 import { listSkills, loadSkill } from "../skills.js";
 import { formatTodos, loadTodos } from "../todo.js";
-import { createCheckpoint, listCheckpoints, rewindToCheckpoint } from "../checkpoint.js";
+import { createCheckpoint, listCheckpoints, pairPromptCheckpoints, rewindToCheckpoint } from "../checkpoint.js";
 import { contextUsage } from "../session/context.js";
 import { flog } from "../utils/filelog.js";
 import {
@@ -39,7 +39,7 @@ import {
 import { helpText, matchModelName, parseCommand, suggestCommands } from "./commands.js";
 
 export type ChatItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; text: string }
   | {
       kind: "tool";
@@ -54,7 +54,16 @@ export type ChatItem =
     }
   | { kind: "info"; tone: "dim" | "yellow" | "red" | "green"; text: string };
 
-/** Referensi minimal untuk membangun pratinjau (tanpa konten besar). */
+export interface ClickHit {
+  y0: number;
+  y1: number;
+  kind: "tool" | "user";
+  id: string;
+  /** User prompt text (kind "user" only) — for the revert menu. */
+  text?: string;
+}
+
+/** Minimal reference for building previews (without bulky content). */
 export interface PreviewRef {
   name: string;
   path?: string;
@@ -125,109 +134,97 @@ function cellWidth(s: string): number {
   return n;
 }
 
-function itemText(it: ChatItem): string {
+/** Split text into exact terminal rows (greedy char-wrap by cell width). */
+export function wrapText(s: string, w: number): string[] {
+  const width = Math.max(20, w);
+  const out: string[] = [];
+  for (const ln of s.split("\n")) {
+    if (ln === "") {
+      out.push("");
+      continue;
+    }
+    let cur = "";
+    let cw = 0;
+    for (const ch of ln) {
+      const cwch = cellWidth(ch);
+      if (cw + cwch > width && cur !== "") {
+        out.push(cur);
+        cur = "";
+        cw = 0;
+      }
+      cur += ch;
+      cw += cwch;
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+/** One rendered terminal row: styled segments (+ tool id / user prompt for clicks). */
+export interface ChatRow {
+  segs: HlSeg[];
+  toolId?: string;
+  /** Set on user content rows: which prompt (for right-click revert). */
+  user?: { id: string; text: string };
+}
+
+/** Chat text width (compensates root padding). */
+function chatWidth(cols: number): number {
+  return Math.max(20, cols - 4);
+}
+
+/**
+ * Flatten one chat item into exact terminal rows (content + one gap row).
+ * Row count IS the height — no estimation, so scroll math never drifts.
+ * Flat Claude-style: no boxes, status shown by color/icon.
+ */
+export function itemRowList(it: ChatItem, cols: number): ChatRow[] {
+  const w = chatWidth(cols);
+  const rows: ChatRow[] = [];
   switch (it.kind) {
-    case "user":
-      return `❯ ${it.text}`;
+    case "user": {
+      const chunks = wrapText(`❯ ${it.text}`, w);
+      chunks.forEach((c, i) => {
+        rows.push(
+          i === 0
+            ? { segs: [{ text: "❯ ", color: "green", bold: true }, { text: c.slice(2) }], user: { id: it.id, text: it.text } }
+            : { segs: [{ text: c }], user: { id: it.id, text: it.text } },
+        );
+      });
+      break;
+    }
     case "assistant":
-      return it.text;
+      for (const c of wrapText(it.text, w)) rows.push({ segs: [{ text: c }] });
+      break;
     case "tool": {
-      const icon = it.status === "running" ? "⏳" : it.status === "ok" ? "✓" : "✗";
-      return `${icon} ${it.summary}${it.detail ? ` · ${it.detail}` : ""}`;
+      const line = `${it.status === "running" ? "⏳" : it.status === "ok" ? "✓" : "✗"} ${it.summary}${it.detail ? ` · ${it.detail}` : ""}`;
+      const paint = (t: string): HlSeg =>
+        it.status === "running"
+          ? { text: t, color: "yellow" }
+          : it.status === "ok"
+            ? { text: t, dim: true }
+            : { text: t, color: "red" };
+      for (const c of wrapText(line, w)) rows.push({ segs: [paint(c)], toolId: it.id });
+      break;
     }
-    case "info":
-      return it.text;
+    case "info": {
+      const paint = (t: string): HlSeg =>
+        it.tone === "dim" ? { text: t, dim: true } : { text: t, color: it.tone };
+      for (const c of wrapText(it.text, w)) rows.push({ segs: [paint(c)] });
+      break;
+    }
   }
-}
-
-/** Chrome box per kind: border(2) + margin bawah(1) untuk boxed, 0 untuk info. */
-function boxChrome(it: ChatItem): number {
-  return it.kind === "info" ? 0 : 3;
-}
-
-/** Perkiraan tinggi item dalam baris terminal (sudah termasuk border + margin). */
-export function itemRows(it: ChatItem, cols: number): number {
-  const boxed = it.kind !== "info";
-  const w = Math.max(20, cols - (boxed ? 6 : 4));
-  const lines = itemText(it)
-    .split("\n")
-    .reduce((n, ln) => n + Math.max(1, Math.ceil(cellWidth(ln) / w)), 0);
-  return lines + boxChrome(it);
+  rows.push({ segs: [{ text: "" }] }); // gap row between blocks
+  return rows;
 }
 
 /**
- * Hitung jendela item yang muat di layar.
- * @param heights tinggi tiap item (searah feed, lama → baru)
- * @param avail baris tersedia untuk chat
- * @param scroll baris yang disembunyikan dari bawah (0 = menempel ekor)
- * @returns start/end (end eksklusif) + scroll yang sudah dijepit
- *
- * scroll 0 → ekor selalu terlihat. Menaikkan scroll menggeser jendela ke atas.
- * Item yang hanya muat sebagian TIDAK dirender (mencegah overlap).
+ * Line-based viewport: scroll rows (0 = tail pinned), slice partial edge items.
+ * @returns start index into the row list + clamped scroll
  */
-export function computeWindow(
-  heights: number[],
-  avail: number,
-  scroll: number,
-): { start: number; end: number; scroll: number; total: number } {
-  const total = heights.reduce((a, b) => a + b, 0);
+export function sliceRowWindow(total: number, avail: number, scroll: number): { start: number; scroll: number } {
   const s = Math.min(Math.max(0, Math.floor(scroll)), Math.max(0, total - avail));
-  // Skip `s` rows from the bottom (whole items only). Partially fitting
-  // bottom items are dropped too — kalau dirender ia overflow menabrak
-  // input box (sumber layar "nabrak").
-  let end = heights.length;
-  let skipped = 0;
-  while (end > 0 && skipped + heights[end - 1] <= s) {
-    skipped += heights[end - 1];
-    end--;
-  }
-  if (end > 0 && skipped < s) end--;
-  // Ambil mundur maksimal `avail` baris (item utuh saja).
-  let start = end;
-  let used = 0;
-  while (start > 0 && used + heights[start - 1] <= avail) {
-    used += heights[start - 1];
-    start--;
-  }
-  return { start, end, scroll: s, total };
-}
-
-/**
- * Potong item raksasa (assistant/info): ambil ekornya saja agar muat maxRows.
- * Mencegah satu item mendorong seluruh layar (chat tak pernah kosong).
- * Untuk info: pertahankan HEADER (baris pertama) agar judul tidak hilang.
- */
-export function sliceItemTail(it: ChatItem, maxRows: number, cols: number): ChatItem {
-  if (it.kind !== "assistant" && it.kind !== "info" && it.kind !== "user") return it;
-  const boxed = it.kind !== "info";
-  // konten ≤ maxRows - penanda(1) - chrome(box border+margin, 0 utk info)
-  const budget = Math.max(1, maxRows - 1 - (boxed ? 3 : 0));
-  const w = Math.max(20, cols - (boxed ? 6 : 4));
-  const lines = it.text.split("\n");
-  if (it.kind === "info") {
-    // For info: keep the first line (header) + following lines until budget runs out
-    let used = 0;
-    let to = 0;
-    while (to < lines.length) {
-      const h = Math.max(1, Math.ceil(cellWidth(lines[to]) / w));
-      if (used + h > budget) break;
-      used += h;
-      to++;
-    }
-    if (to >= lines.length) return it;
-    return { ...it, text: lines.slice(0, to).join("\n") + `\n… (${lines.length - to} baris di bawah disembunyikan)` };
-  }
-  // assistant/user: ambil ekor
-  let used = 0;
-  let from = lines.length;
-  while (from > 0) {
-    const h = Math.max(1, Math.ceil(cellWidth(lines[from - 1]) / w));
-    if (used + h > budget) break;
-    used += h;
-    from--;
-  }
-  if (from <= 0) return it;
-  return { ...it, text: `… (${lines.length - from} baris di atas disembunyikan)\n` + lines.slice(from).join("\n") };
+  return { start: Math.max(0, total - avail - s), scroll: s };
 }
 
 /** Text row heights (for preview panels & click maps). */
@@ -276,6 +273,29 @@ export function historyStep(current: number | null, dir: -1 | 1, len: number): n
   if (next < 0) return 0;
   if (next >= len) return null;
   return next;
+}
+
+/**
+ * Strip invisible terminal junk so stray bytes can never corrupt prompts
+ * or break "/" parsing (which silently routes commands to the LLM).
+ * Aggressive: strip ALL control chars (0x00-0x1f, 0x7f), ESC, CSI, OSC,
+ * mouse sequences, orphan remnants. Only printable ASCII + Unicode survive.
+ */
+export function sanitizeInput(v: string): string {
+  return stripMouseSequences(v)
+    // OSC sequences: ESC ] ... BEL/ST
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // CSI sequences: ESC [ ... final char
+    .replace(/\x1b\[[0-9;?]*[@-~]/g, "")
+    // Bracketed paste: ESC [ 200 ~ ... ESC [ 201 ~
+    .replace(/\x1b\[20[01]~/g, "")
+    // Orphan mouse remnants (no leading ESC)
+    .replace(/^(?:\d+;){1,2}\d+[mM]/, "")
+    .replace(/\[<?\d{0,4};?\d{0,4}/g, "")
+    // ALL control chars: 0x00-0x1f (includes tab, CR, LF, ESC) + 0x7f (DEL)
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    // Any remaining ESC that slipped through
+    .replace(/\x1b/g, "");
 }
 
 /** Show the original prompt, not the initial-context blob.
@@ -327,13 +347,14 @@ function toolStatusOf(parsed: unknown): "ok" | "error" {
 export function rebuildItems(messages: Session["messages"]): ChatItem[] {
   const out: ChatItem[] = [];
   const toolById = new Map<string, string>();
+  let ui = 0; // stable per-resume ids for user rows (right-click revert)
   for (const m of messages) {
     if (m.role === "tool" && m.tool_call_id) toolById.set(m.tool_call_id, m.content);
   }
   for (const m of messages) {
     if (m.role === "user") {
       if (ABORT_RE.test(m.content.trim())) continue;
-      out.push({ kind: "user", text: displayPrompt(m.content) });
+      out.push({ kind: "user", id: `u${ui++}`, text: displayPrompt(m.content) });
     } else if (m.role === "assistant") {
       if (m.content.trim()) out.push({ kind: "assistant", text: m.content });
       for (const tc of m.tool_calls ?? []) {
@@ -463,9 +484,9 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   // ── Izin terminal/file inline: [y] sekali / [a] semua serupa / [n] tolak ──
   const [approval, setApproval] = useState<{ label: string; scope: string } | null>(null);
 
-  // ── Dropdown SelectList: model/provider/commands ──
+  // ── Dropdown SelectList: model/provider/commands/menu ──
   const [dropdown, setDropdown] = useState<{
-    type: "models" | "providers" | "commands";
+    type: "models" | "providers" | "commands" | "menu";
     title: string;
     options: string[];
     selected: number;
@@ -478,6 +499,11 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
 
   const openProviderDropdown = useCallback((options: string[], onSelect: (value: string) => void) => {
     setDropdown({ type: "providers", title: "Provider", options, selected: 0, onSelect });
+  }, []);
+
+  /** Generic popup menu (e.g. right-click revert). Esc cancels. */
+  const openMenuDropdown = useCallback((title: string, options: string[], onSelect: (value: string) => void) => {
+    setDropdown({ type: "menu", title, options, selected: 0, onSelect });
   }, []);
 
   const closeDropdown = useCallback(() => {
@@ -517,7 +543,7 @@ interface PreviewState {
   // ── Pratinjau fullscreen baris tool (klik → buka, Esc → tutup) ──
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [previewScroll, setPreviewScroll] = useState(0);
-  const rowMapRef = useRef<Array<{ y0: number; y1: number; id: string }>>([]);
+  const rowMapRef = useRef<ClickHit[]>([]);
   const lastMouseAt = useRef(0);
   // Timestamp COMPLETE mouse sequences (parser) — untuk menangkal phantom Esc.
   // Lebih presisi dari lastMouseAt (potongan chunk) sehingga Esc asli lolos.
@@ -528,10 +554,11 @@ interface PreviewState {
   const navValueRef = useRef<string | null>(null);
   const draftRef = useRef("");
   const openPreviewRef = useRef<(id: string) => void>(() => {});
-  const clickRef = useRef<{ rowMap: Array<{ y0: number; y1: number; id: string }>; previewOpen: boolean }>({
+  const clickRef = useRef<{ rowMap: ClickHit[]; previewOpen: boolean }>({
     rowMap: [],
     previewOpen: false,
   });
+  const openRevertRef = useRef<(userId: string, text: string) => void>(() => {});
 
   const closePreview = useCallback(() => {
     setPreview(null);
@@ -615,6 +642,68 @@ interface PreviewState {
     [flushStream, push],
   );
 
+  /**
+   * Rewind to a user prompt's auto-checkpoint: restores files + history,
+   * then loads the prompt into the input for editing (not auto-sent).
+   */
+  const doRevertUserPrompt = useCallback(
+    (userId: string, text: string) => {
+      if (runningRef.current) {
+        push({ kind: "info", tone: "yellow", text: "Wait for the turn to finish first." });
+        return;
+      }
+      const sess = sessionRef.current;
+      const items = itemsRef.current;
+      const userTexts = items.filter((m) => m.kind === "user").map((m) => (m as { text: string }).text);
+      const order = items.filter((m) => m.kind === "user").findIndex((m) => (m as { id: string }).id === userId);
+      if (order < 0) {
+        push({ kind: "info", tone: "red", text: "Prompt no longer on screen." });
+        return;
+      }
+      const cps = listCheckpoints(sess.id).map((c) => ({ id: c.id, label: c.label, createdAt: c.createdAt }));
+      const cpId = pairPromptCheckpoints(userTexts, cps).get(order);
+      if (!cpId) {
+        push({ kind: "info", tone: "yellow", text: "No checkpoint for this prompt (it may have been pruned). Nothing to rewind." });
+        return;
+      }
+      const { session: next, result } = rewindToCheckpoint(sess, workspaceDir, cpId);
+      if (!result.ok) {
+        push({ kind: "info", tone: "red", text: result.error || "Rewind failed." });
+        return;
+      }
+      persist(next);
+      agentRef.current = makeAgent(next, maxSteps, handleEvent, asker);
+      setCutoff(itemsRef.current.length + 1);
+      setScrollOffset(0);
+      for (const it of rebuildItems(next.messages)) push(it);
+      setInput(text);
+      const bits = [
+        `${result.restored.length} files restored`,
+        ...(result.deleted.length > 0 ? [`${result.deleted.length} files deleted`] : []),
+        ...(result.skipped.length > 0 ? [`${result.skipped.length} skipped`] : []),
+      ];
+      push({ kind: "info", tone: "green", text: `Rewound to "${text.slice(0, 60)}" (${bits.join(", ")}). Prompt loaded below — edit, then Enter to resend.` });
+    },
+    [handleEvent, maxSteps, persist, push, workspaceDir, asker],
+  );
+
+  const openRevertMenu = useCallback(
+    (userId: string, text: string) => {
+      setDropdown(null);
+      openMenuDropdown(`Prompt • checkpoint`, [
+        "↩ Rewind to here (restore files + history)",
+        "⧉ Save checkpoint here",
+      ], (pick) => {
+        if (pick.startsWith("↩")) doRevertUserPrompt(userId, text);
+        else {
+          const cp = createCheckpoint(sessionRef.current, workspaceDir, text);
+          push({ kind: "info", tone: "green", text: `Checkpoint saved: ${cp.id.slice(0, 8)} "${cp.label}".` });
+        }
+      });
+    },
+    [doRevertUserPrompt, openMenuDropdown, push, workspaceDir],
+  );
+
   if (!agentRef.current) {
     agentRef.current = makeAgent(sessionRef.current, maxSteps, handleEvent, asker);
   }
@@ -627,7 +716,14 @@ interface PreviewState {
       }
       runningRef.current = true;
       setRunning(true);
-      push({ kind: "user", text: prompt });
+      // Auto-checkpoint BEFORE the turn: right-click revert on this prompt
+      // restores files + history to exactly this point.
+      try {
+        createCheckpoint(sessionRef.current, workspaceDir, prompt);
+      } catch {
+        /* checkpoint is best-effort, the turn still runs */
+      }
+      push({ kind: "user", id: `u${Date.now().toString(36)}${Math.floor(Math.random() * 0xffff).toString(16)}`, text: prompt });
       try {
         const sess = sessionRef.current;
         const { messages, result } = await agentRef.current!.chatTurn(prompt, workspaceDir, sess.messages);
@@ -1124,9 +1220,11 @@ interface PreviewState {
 
   const submit = useCallback(
     (value: string) => {
-      const text = value.trim();
+      // Sanitize FIRST: invisible bytes (ANSI/mouse/paste) must never reach
+      // parsing — a dirty "/quit" would otherwise run as an LLM prompt.
+      const text = sanitizeInput(value).trim();
       if (!text) return;
-      // Catat ke riwayat prompt (dedup berurutan, cap 100).
+      // Record prompt history (consecutive dedup, cap 100).
       const h = histRef.current;
       if (h[h.length - 1] !== text) {
         h.push(text);
@@ -1135,7 +1233,7 @@ interface PreviewState {
       histIdxRef.current = null;
       navValueRef.current = null;
       setInput("");
-      setScrollOffset(0); // output baru → kembali menempel ekor
+      setScrollOffset(0); // new output → stick back to tail
       const cmd = parseCommand(text);
       if (cmd) void execCommand(cmd.name, cmd.args);
       else void runTurn(text);
@@ -1143,16 +1241,14 @@ interface PreviewState {
     [execCommand, runTurn],
   );
 
-  // Filter leftover mouse sequences out of typing (Ink receives the bytes too).
-  // Sequence lengkap + yatim (tanpa ESC) selalu dibuang; ekor parsial dibuang
-  // hanya sesaat setelah aktivitas mouse (agar tak menelan ketikan normal).
-  // Sekaligus: buka/tutup dropdown autocomplete "/" dan reset navigasi riwayat
-  // bila user mengetik sendiri (bukan dari navigasi ↑/↓).
+  // Filter leftover terminal junk out of typing (Ink receives the bytes too).
+  // Complete sequences always dropped; partial tails only briefly after mouse
+  // activity (so normal typing is never eaten). Also: open/close the "/"
+  // autocomplete dropdown and reset history navigation when the user types
+  // themselves (not via ↑/↓ navigation).
   const onInputChange = useCallback((v: string) => {
-    let c = stripMouseSequences(v);
+    let c = sanitizeInput(v);
     if (Date.now() - lastMouseAt.current < 300) {
-      c = c.replace(/\x1b\[<?[\d;]*/g, "");
-      c = c.replace(/^(?:\d+;){1,2}\d*[mM]/, "");
       c = c.replace(/\[<?\d{0,4};?\d{0,4}$/, "");
     }
     if (c !== navValueRef.current) histIdxRef.current = null;
@@ -1204,10 +1300,10 @@ interface PreviewState {
     return () => clearInterval(t);
   }, [running]);
 
-  // Mouse-click a tool row → pratinjau fullscreen.
-  // Wheel/gesture → scroll chat (or preview when open).
-  // Listener sendiri di stdin mentah; Ink tetap menerima bytes-nya sehingga
-  // filter di onChange + jendela escape di KeyHandler menangkal sampah ketik.
+  // Left-click a tool row → fullscreen preview. Right-click a user prompt →
+  // revert menu (checkpoint popup). Wheel/gesture → scroll chat (or preview).
+  // Own listener on raw stdin; Ink still receives the bytes, so the onChange
+  // filter + KeyHandler escape window fend off typing garbage.
   useEffect(() => {
     const parser = createMouseParser(
       (c) => {
@@ -1215,13 +1311,20 @@ interface PreviewState {
         const st = clickRef.current;
         if (!st || st.previewOpen) return;
         const hit = st.rowMap.find((r) => c.y >= r.y0 && c.y < r.y1);
-        if (hit) openPreviewRef.current(hit.id);
+        if (hit && hit.kind === "tool") openPreviewRef.current(hit.id);
       },
       (dir) => {
         lastSeqAt.current = Date.now();
         const d = dir === "up" ? SCROLL_STEP : -SCROLL_STEP;
         if (clickRef.current.previewOpen) setPreviewScroll((s) => Math.max(0, s + d));
         else setScrollOffset((s) => Math.max(0, s + d));
+      },
+      (c) => {
+        lastSeqAt.current = Date.now();
+        const st = clickRef.current;
+        if (!st || st.previewOpen) return;
+        const hit = st.rowMap.find((r) => c.y >= r.y0 && c.y < r.y1);
+        if (hit && hit.kind === "user" && hit.text !== undefined) openRevertRef.current(hit.id, hit.text);
       },
     );
     const onData = (chunk: Buffer) => {
@@ -1255,42 +1358,32 @@ interface PreviewState {
     ddVisible = dropdown.options.slice(ddOffset, ddOffset + DD_MAX);
   }
 
-  // Manual normal-direction viewport: scrollOffset 0 = tail (newest) pinned bottom.
-  // Naikkan scrollOffset untuk melihat riwayat lama; dijepit agar tak kosong.
+  // Smooth line-based viewport: every chat row scrolls (no page-break jumps).
+  // scrollOffset 0 = tail (newest) pinned bottom; clamped so view never empties.
   const CHROME_ROWS = 4 + 1 + 3 + 1; // header + margin + input + status
   const approvalRows = approval ? 5 : 0;
   const dropdownRows = dropdown ? 8 + ddVisible.length : 0;
   const avail = Math.max(5, rows - CHROME_ROWS - approvalRows - dropdownRows - 2);
   const feed: ChatItem[] = stream ? [...visible, { kind: "assistant", text: `${stream}▍` }] : visible;
-  const heights = feed.map((it) => itemRows(it, cols));
-  const { start, end, scroll } = computeWindow(heights, avail, scrollOffset);
-  let windowed = feed.slice(start, end);
-  // Satu item raksasa melebihi layar: tampilkan ekornya, jangan kosongkan chat.
-  if (windowed.length === 1 && itemRows(windowed[0], cols) > avail) {
-    windowed = [sliceItemTail(windowed[0], avail, cols)];
-  }
-  // Pengaman lapis kedua: feed tak kosong → jangan pernah tampil kosong.
-  if (windowed.length === 0 && feed.length > 0) {
-    const anchor = feed[Math.min(Math.max(end - 1, 0), feed.length - 1)];
-    windowed = [sliceItemTail(anchor, avail, cols)];
-  }
+  const allRows: ChatRow[] = feed.flatMap((it) => itemRowList(it, cols));
+  const { start, scroll } = sliceRowWindow(allRows.length, avail, scrollOffset);
+  const winRows = allRows.slice(start, start + avail);
 
-  // ── Terminal row → tool id map for mouse clicks (1-based coordinates).
-  // Info header moved below the prompt for a clean top; chat selalu mulai
-  // di baris 2 (margin atas feed 1 baris).
+  // ── Terminal row → click map for mouse (1-based coordinates).
+  // Header info sits below the prompt for a clean top; chat starts at row 2
+  // (1 row of feed top margin). Tool rows → preview, user rows → revert menu.
   const chatStartRow = 2;
   {
-    let _y = chatStartRow;
-    const rowMap: Array<{ y0: number; y1: number; id: string }> = [];
-    for (const it of windowed) {
-      const h = itemRows(it, cols);
-      if (it.kind === "tool") rowMap.push({ y0: _y, y1: _y + h, id: it.id });
-      _y += h;
-    }
+    const rowMap: ClickHit[] = [];
+    winRows.forEach((r, i) => {
+      if (r.toolId) rowMap.push({ y0: chatStartRow + i, y1: chatStartRow + i + 1, kind: "tool", id: r.toolId });
+      else if (r.user) rowMap.push({ y0: chatStartRow + i, y1: chatStartRow + i + 1, kind: "user", id: r.user.id, text: r.user.text });
+    });
     rowMapRef.current = rowMap;
   }
   clickRef.current = { rowMap: rowMapRef.current, previewOpen: preview !== null };
   openPreviewRef.current = openPreviewById;
+  openRevertRef.current = openRevertMenu;
 
   // ── Fullscreen preview panel: border(2) + title(1) + footer(1).
   const previewAvail = preview ? Math.max(5, rows - 4 - 1 - 4 - 1 - (approval ? 5 : 0)) : 0;
@@ -1374,42 +1467,20 @@ interface PreviewState {
             ) : null}
           </Box>
         ) : (
-          windowed.map((it, ri) => {
-            const isStream = stream !== "" && start + ri === feed.length - 1;
-            const key = isStream ? "__stream" : `${cutoff}-${start + ri}`;
-          // Plain info; user/assistant/tool each get their own box + color.
-          if (it.kind === "info") {
-            return (
-              <Box key={key}>
-                <Text color={it.tone === "dim" ? undefined : it.tone} dimColor={it.tone === "dim"}>{it.text}</Text>
-              </Box>
-            );
-          }
-          const borderColor =
-            it.kind === "user"
-              ? "green"
-              : it.kind === "assistant"
-                ? "blue"
-                : it.status === "running"
-                  ? "yellow"
-                  : it.status === "error"
-                    ? "red"
-                    : "gray";
-          return (
-            <Box key={key} borderStyle="round" borderColor={borderColor} paddingX={1} marginBottom={1}>
-              {it.kind === "user" && (
-                <Text><Text bold color="green">❯ </Text><Text>{it.text}</Text></Text>
+          // Flat Claude-style feed: styled rows, no boxes (enables smooth per-row scroll).
+          winRows.map((row, i) => (
+            <Text key={`${cutoff}-${start + i}`}>
+              {row.segs.every((s) => s.text === "") ? (
+                " "
+              ) : (
+                row.segs.map((s, j) => (
+                  <Text key={j} color={s.dim ? undefined : s.color} dimColor={s.dim ? true : undefined} bold={s.bold}>
+                    {s.text}
+                  </Text>
+                ))
               )}
-              {it.kind === "assistant" && <Text>{it.text}</Text>}
-              {it.kind === "tool" && (
-                <Text dimColor>
-                  {it.status === "running" ? "⏳" : it.status === "ok" ? "✓" : "✗"} {it.summary}
-                  {it.detail ? ` · ${it.detail}` : ""}
-                </Text>
-              )}
-            </Box>
-          );
-          }))}
+            </Text>
+          )))}
       </Box>
 
       {dropdown && !preview && (

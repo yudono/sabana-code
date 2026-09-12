@@ -22,10 +22,12 @@ const TAIL_RE = /\x1b(?:\[<?[\d;]*)?$/;
  * Build a stateful parser: feed it stdin chunks.
  * - onClick: LEFT press (1-based coordinates).
  * - onWheel (optional): trackpad/mouse wheel gestures (cb 64 = up, 65 = down).
+ * - onRightClick (optional): RIGHT press (1-based coordinates, e.g. context menus).
  */
 export function createMouseParser(
   onClick: (c: MouseClick) => void,
   onWheel?: (dir: WheelDir) => void,
+  onRightClick?: (c: MouseClick) => void,
 ): (chunk: string) => void {
   let buf = "";
   return (chunk: string) => {
@@ -36,11 +38,14 @@ export function createMouseParser(
     while ((m = SGR_RE.exec(buf))) {
       const cb = parseInt(m[1], 10);
       const trailer = m[4];
+      const pos = { x: parseInt(m[2], 10), y: parseInt(m[3], 10) };
       if (trailer === "M" && (cb & 64) !== 0) {
         // Wheel has no meaningful release — each tick = 1 step.
         onWheel?.((cb & 1) !== 0 ? "down" : "up");
+      } else if (trailer === "M" && (cb & 3) === 2 && (cb & 64) === 0 && (cb & 32) === 0) {
+        onRightClick?.(pos);
       } else if (trailer === "M" && (cb & 3) === 0 && (cb & 64) === 0 && (cb & 32) === 0) {
-        onClick({ x: parseInt(m[2], 10), y: parseInt(m[3], 10) });
+        onClick(pos);
       }
       lastEnd = m.index + m[0].length;
     }

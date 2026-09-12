@@ -33,10 +33,23 @@ describe("mouse SGR parser", () => {
     assert.deepEqual(wheels, ["up", "up", "down"]);
   });
 
-  it("without onWheel: wheel still ignored (legacy compat)", () => {
+  it("right press (cb 2) → onRightClick, not onClick", () => {
+    const clicks: MouseClick[] = [];
+    const rights: MouseClick[] = [];
+    const feed = createMouseParser(
+      (c) => clicks.push(c),
+      undefined,
+      (c) => rights.push(c),
+    );
+    feed("\x1b[<2;10;20M\x1b[<2;10;20m");
+    assert.deepEqual(rights, [{ x: 10, y: 20 }]);
+    assert.deepEqual(clicks, []);
+  });
+
+  it("without onRightClick: right press ignored (legacy compat)", () => {
     const clicks: MouseClick[] = [];
     const feed = createMouseParser((c) => clicks.push(c));
-    feed("\x1b[<64;1;1M");
+    feed("\x1b[<2;1;1M");
     assert.deepEqual(clicks, []);
   });
 

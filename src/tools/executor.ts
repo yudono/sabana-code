@@ -8,15 +8,6 @@ export type ToolHandler = (
   signal?: AbortSignal,
 ) => Promise<unknown>;
 
-const BLOCKED_SHELL = [
-  /\bnpm\s+run\s+dev\b/,
-  /\bnpx\s+vite\b/,
-  /\bnext\s+dev\b/,
-  /\bsleep\s+\d/,
-  /\bwhile\s+true\b/,
-  /&\s*$/,
-];
-
 export class ToolExecutor {
   private handlers = new Map<string, ToolHandler>();
   constructor(
@@ -54,19 +45,6 @@ export class ToolExecutor {
           `Permission denied: ${call.name}${command ? ` (${command})` : ""} [${key} denied for this session — ` +
           `do NOT retry similar commands; continue another way or ask the user to reset via a new session]`,
       });
-    }
-
-    if (call.name === "shell" && typeof call.args.command === "string") {
-      for (const re of BLOCKED_SHELL) {
-        if (re.test(call.args.command)) {
-          return fail({
-            error:
-              `BLOCKED: the command would hang the agent loop (dev server / sleep / background). ` +
-              `Command: ${call.args.command}\n` +
-              `Just write the files and stop — the user runs servers themselves.`,
-          });
-        }
-      }
     }
 
     const handler = this.handlers.get(call.name);

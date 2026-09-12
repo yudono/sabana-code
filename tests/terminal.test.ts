@@ -35,12 +35,14 @@ describe("terminal shell", () => {
     assert.equal(r.exitCode, 3);
   });
 
-  it("executor blocks dev servers so the loop never hangs", async () => {
+  it("executor allows dev servers and background commands (no BLOCKED_SHELL)", async () => {
     const ws = mkdtempSync(join(tmpdir(), "sc-sh-"));
     const ex = executor(ws);
-    const blocked = await ex.execute({ id: "1", name: "shell", args: { command: "npm run dev" } });
-    assert.equal(blocked.status, "error");
-    assert.ok(JSON.stringify(blocked.output).includes("BLOCKED"));
+    // `npm run dev` in an empty dir fails fast (no package.json script) — but it must
+    // NOT be blocked by a static denylist; the agent manages long-running tasks itself.
+    const r = await ex.execute({ id: "1", name: "shell", args: { command: "npm run dev" } });
+    assert.equal(r.status, "success");
+    assert.ok(!JSON.stringify(r.output).includes("BLOCKED"));
   });
 
   it("executor allows ordinary commands", async () => {

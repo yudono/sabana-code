@@ -1,67 +1,108 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { itemRows, sliceItemTail, type ChatItem } from "../src/tui/App.js";
+import { itemRowList, sliceRowWindow, wrapText, type ChatItem, type ChatRow } from "../src/tui/App.js";
 
-const user = (text: string): ChatItem => ({ kind: "user", text });
+const user = (text: string, id = "u1"): ChatItem => ({ kind: "user", id, text });
 const assistant = (text: string): ChatItem => ({ kind: "assistant", text });
+const rows = (it: ChatItem, cols = 80): ChatRow[] => itemRowList(it, cols);
+const texts = (rs: ChatRow[]): string[] => rs.map((r) => r.segs.map((s) => s.text).join(""));
 
-describe("viewport itemRows", () => {
-  it("short lines = content + chrome box (border 2 + margin 1)", () => {
-    assert.equal(itemRows(user("halo"), 80), 4);
+describe("wrapText", () => {
+  it("short lines stay whole, empties kept", () => {
+    assert.deepEqual(wrapText("halo", 76), ["halo"]);
+    assert.deepEqual(wrapText("l1\n\nl2", 76), ["l1", "", "l2"]);
   });
 
-  it("long lines wrap to box width (cols-6, prefix ❯ = 3 cells)", () => {
-    // lebar konten = 80-6 = 74; prefix "❯ " = 3 sel
-    assert.equal(itemRows(user("a".repeat(71)), 80), 4);
-    assert.equal(itemRows(user("a".repeat(72)), 80), 5);
-    assert.equal(itemRows(user("a".repeat(142)), 80), 5);
-    assert.equal(itemRows(user("a".repeat(146)), 80), 6);
-  });
-
-  it("multilines count per row + chrome box", () => {
-    assert.equal(itemRows(assistant("l1\nl2"), 80), 5); // 2 baris + 3 chrome
-    assert.equal(itemRows(user("l1\nl2"), 80), 5);
+  it("greedy char-wrap at exact width", () => {
+    assert.deepEqual(wrapText("a".repeat(76), 76), ["a".repeat(76)]);
+    assert.deepEqual(wrapText("a".repeat(77), 76), ["a".repeat(76), "a"]);
   });
 
   it("wide (CJK) chars count 2 cells", () => {
-    // "あ"*35 = 70 sel + prefix 3 = 73 → 1 baris → 4; *36 = 75 → 2 baris → 5
-    assert.equal(itemRows(user("あ".repeat(35)), 80), 4);
-    assert.equal(itemRows(user("あ".repeat(36)), 80), 5);
+    assert.deepEqual(wrapText("あ".repeat(38), 76), ["あ".repeat(38)]);
+    assert.deepEqual(wrapText("あ".repeat(39), 76), ["あ".repeat(38), "あ"]);
+  });
+});
+
+describe("itemRowList (flat rows + gap)", () => {
+  it("user rows carry a green ❯ prefix on the first row", () => {
+    const rs = rows(user("halo"));
+    assert.equal(rs.length, 2); // 1 content + 1 gap
+    assert.equal(rs[0].segs[0].text, "❯ ");
+    assert.equal(rs[0].segs[0].color, "green");
+    assert.equal(rs[0].segs[1].text, "halo");
+    assert.deepEqual(rs[1].segs, [{ text: "" }]);
+    assert.equal(rs[0].toolId, undefined);
   });
 
-  it("prefix ❯ is counted (safe bias: symbols = 2 cells)", () => {
-    // "❯ "(2+1) + 70 char = 73 sel → 1 baris → 4; +1 char → 2 baris → 5
-    assert.equal(itemRows(user("b".repeat(70)), 80), 4);
-    assert.equal(itemRows(user("b".repeat(71)), 80), 4);
-    assert.equal(itemRows(user("b".repeat(72)), 80), 5);
+  it("long user text wraps with prefix counted (cols-4 width)", () => {
+    // content width = 80-4 = 76; "❯ "(3) + 73 a's = 76 → fits
+    assert.equal(rows(user("a".repeat(73))).length, 2);
+    // 74 a's → 2 content rows + gap
+    const rs = rows(user("a".repeat(74)));
+    assert.equal(rs.length, 3);
+    assert.equal(rs[1].segs[0].text, "a");
   });
 
-  it("tools always 1 content row + chrome for short summaries", () => {
-    const t: ChatItem = { kind: "tool", id: "1", summary: "read_file App.tsx", status: "ok", detail: "baris 1–50 dari 320" };
-    assert.equal(itemRows(t, 80), 4);
+  it("assistant rows are plain + gap", () => {
+    const rs = rows(assistant("l1\nl2"));
+    assert.deepEqual(texts(rs), ["l1", "l2", ""]);
+    assert.ok(rs.every((r) => r.toolId === undefined));
   });
 
-  it("sliceItemTail: fitting items returned whole", () => {
-    const a: ChatItem = { kind: "assistant", text: "l1\nl2\nl3" };
-    assert.deepEqual(sliceItemTail(a, 10, 80), a);
+  it("tool rows carry dim style + toolId for clicks", () => {
+    const t: ChatItem = { kind: "tool", id: "t1", name: "read_file", preview: { name: "read_file" }, summary: "read_file App.tsx", status: "ok" };
+    const rs = rows(t);
+    assert.equal(rs.length, 2);
+    assert.equal(rs[0].toolId, "t1");
+    assert.equal(rs[0].segs[0].dim, true);
+    assert.ok(rs[0].segs[0].text.startsWith("✓"));
   });
 
-  it("sliceItemTail: giant items tail-sliced + marker", () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `baris-${i}`);
-    const a: ChatItem = { kind: "assistant", text: lines.join("\n") };
-    const cut = sliceItemTail(a, 10, 80);
-    assert.ok(cut.text.startsWith("… ("));
-    assert.ok(cut.text.includes("baris-49"));
-    assert.ok(!cut.text.includes("baris-0\n"));
-    assert.ok(itemRows(cut, 80) <= 10);
+  it("error tool rows are red, running rows yellow", () => {
+    const e: ChatItem = { kind: "tool", id: "e", name: "shell", preview: { name: "shell" }, summary: "$ rm x", status: "error" };
+    assert.equal(rows(e)[0].segs[0].color, "red");
+    const r: ChatItem = { kind: "tool", id: "r", name: "shell", preview: { name: "shell" }, summary: "$ npm test", status: "running" };
+    assert.equal(rows(r)[0].segs[0].color, "yellow");
   });
 
-  it("sliceItemTail: ignores tool kind, slices giant users", () => {
-    const t: ChatItem = { kind: "tool", id: "1", summary: "x".repeat(500), status: "ok" };
-    assert.deepEqual(sliceItemTail(t, 5, 80), t);
-    const u: ChatItem = { kind: "user", text: Array.from({ length: 50 }, (_, i) => `b-${i}`).join("\n") };
-    const cut = sliceItemTail(u, 10, 80);
-    assert.ok(cut.text.includes("b-49"));
-    assert.ok(itemRows(cut, 80) <= 10);
+  it("info rows keep their tone", () => {
+    const rs = rows({ kind: "info", tone: "red", text: "boom" });
+    assert.equal(rs[0].segs[0].color, "red");
+    const dim = rows({ kind: "info", tone: "dim", text: "hi" });
+    assert.equal(dim[0].segs[0].dim, true);
+  });
+
+  it("giant items flatten fully (window slices them, no page break)", () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `row-${i}`);
+    const rs = rows(assistant(lines.join("\n")));
+    assert.equal(rs.length, 51); // 50 content + 1 gap
+    assert.equal(rs[0].segs[0].text, "row-0");
+    assert.equal(rs[49].segs[0].text, "row-49");
+  });
+});
+
+describe("sliceRowWindow (smooth per-row scroll)", () => {
+  it("scroll 0 → tail pinned to bottom", () => {
+    assert.deepEqual(sliceRowWindow(10, 6, 0), { start: 4, scroll: 0 });
+  });
+
+  it("every scroll step moves exactly 1 row (no jumps)", () => {
+    const starts = [0, 1, 2, 3, 4].map((s) => sliceRowWindow(10, 6, s).start);
+    assert.deepEqual(starts, [4, 3, 2, 1, 0]);
+  });
+
+  it("partial edge rows included (sliced, not dropped)", () => {
+    // total 10, avail 6, scroll 3 → rows[1..6] (top partial kept)
+    assert.deepEqual(sliceRowWindow(10, 6, 3), { start: 1, scroll: 3 });
+  });
+
+  it("scroll clamps to the maximum", () => {
+    assert.deepEqual(sliceRowWindow(6, 6, 999), { start: 0, scroll: 0 });
+    assert.deepEqual(sliceRowWindow(0, 10, 0), { start: 0, scroll: 0 });
+  });
+
+  it("empty/short feeds show everything", () => {
+    assert.deepEqual(sliceRowWindow(3, 10, 0), { start: 0, scroll: 0 });
   });
 });

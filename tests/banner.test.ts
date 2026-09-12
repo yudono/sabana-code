@@ -34,7 +34,7 @@ describe("hasChatItems", () => {
   });
 
   it("user/assistant/tool = chat exists", () => {
-    assert.equal(hasChatItems([{ kind: "info" }, { kind: "user" }]), true);
+    assert.equal(hasChatItems([{ kind: "info" }, { kind: "user", id: "u1" }]), true);
     assert.equal(hasChatItems([{ kind: "assistant" }]), true);
     assert.equal(hasChatItems([{ kind: "tool" }]), true);
   });

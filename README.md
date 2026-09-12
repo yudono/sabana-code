@@ -39,8 +39,10 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
   their tools appear as `mcp__<server>__<tool>` and work like built-in tools (`/mcp`, `/mcp reload`).
 - **Todo queue** — the agent plans multi-step work with `todo_write`/`todo_list`,
   stored per project in `~/sabana-code/todos/` so the queue survives session switches (`/todo`).
-- **Checkpoint & rewind** — snapshot files + history before risky work
-  (`/checkpoint [label]`), restore any time (`/checkpoints`, `/rewind <id>`).
+- **Checkpoint & rewind** — every turn auto-saves a snapshot; right-click any
+  prompt for a popup (`↩ Rewind to here` restores files + history and reloads
+  the prompt for editing, `⧉ Save checkpoint here`), or use
+  (`/checkpoint [label]`, `/checkpoints`, `/rewind <id>`) manually.
 - **Multi-provider & multi-model** — OpenAI, Anthropic, Google Gemini, Groq, Together,
   OpenRouter, Perplexity, local Ollama, or any OpenAI-compatible custom URL.
   Switch anytime without losing history; model list is fetched live from `/v1/models`.
