@@ -38,7 +38,8 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
 - **MCP servers** — connect any Model Context Protocol server via `~/sabana-code/mcp.json`;
   their tools appear as `mcp__<server>__<tool>` and work like built-in tools (`/mcp`, `/mcp reload`).
 - **Todo queue** — the agent plans multi-step work with `todo_write`/`todo_list`,
-  stored per project in `~/sabana-code/todos/` so the queue survives session switches (`/todo`).
+  stored per project in `~/sabana-code/todos/` so the queue survives session switches.
+  Completions render as a live numbered panel (`/todo` to view).
 - **Checkpoint & rewind** — every turn auto-saves a snapshot; right-click any
   prompt for a popup (`↩ Rewind to here` restores files + history and reloads
   the prompt for editing, `⧉ Save checkpoint here`), or use
@@ -48,6 +49,10 @@ A coding agent with TUI (terminal UI) inspired by claude-code and opencode — a
   Switch anytime without losing history; model list is fetched live from `/v1/models`.
 - **Auto-compact context** — when context hits >80% of the window, older messages
   are automatically summarized into one; can also be triggered manually via `/compact`.
+- **Effort presets** — `/effort [low|medium|high]` trades thinking budget for speed
+  per session (shown in the status bar).
+- **Live TUI extras** — model thinking streams into dim `◉` blocks, the input shows
+  live `step N/M` progress, and sub-agent runs report steps, tools, time, and files.
 - **Guardrails** — blocks prompt injection (ignore/reveal/role-hijack/context-dump),
   XSS, pasted private keys, sensitive-file references, and literal destructive shell;
   `read_file`/`grep` refuse private key material (`~/.ssh/id_*`, `/etc/shadow`,
@@ -136,6 +141,7 @@ TUI commands:
 | `/models [filter\|number]` | live model list from provider + select (or manual via `/model`) |
 | `/providers [use\|login ...]` | manage connected multi-providers |
 | `/compact` | compact current context (auto at >80% window) |
+| `/effort [low\|medium\|high]` | show/set thinking budget for this session |
 | `/login <provider> <key>`, `/logout` | manage global credentials |
 | `/agents`, `/agent <name> <task>` | view & delegate to sub-agent |
 | `/skills`, `/skill <name>` | list skills & view one skill's instructions |

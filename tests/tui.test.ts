@@ -23,7 +23,7 @@ describe("slash commands", () => {
 
   it("help lists all commands", () => {
     const h = helpText();
-    for (const c of ["help", "new", "sessions", "projects", "resume", "models", "providers", "compact", "login", "logout", "agents", "agent", "context", "tools", "clear", "quit"]) {
+    for (const c of ["help", "new", "sessions", "projects", "resume", "models", "providers", "compact", "effort", "login", "logout", "agents", "agent", "skills", "skill", "todo", "mcp", "checkpoint", "checkpoints", "rewind", "context", "tools", "clear", "quit"]) {
       assert.ok(h.includes(`/${c}`), `help tidak memuat /${c}`);
     }
     for (const c of ["model ", "provider "]) {

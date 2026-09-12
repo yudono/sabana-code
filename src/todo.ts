@@ -89,6 +89,15 @@ export function formatTodos(items: TodoItem[]): string {
     .join("\n");
 }
 
+/** Numbered list for the TUI todo panel (1. 2. 3. …). */
+export function formatTodoList(items: TodoItem[]): string {
+  if (items.length === 0) return "(no todos yet)";
+  const icon = { pending: "○", in_progress: "◐", completed: "●" } as const;
+  const done = items.filter((t) => t.status === "completed").length;
+  const lines = items.map((t, i) => `${i + 1}. ${icon[t.status]} ${t.content}`);
+  return [`Todos (${done}/${items.length}):`, ...lines].join("\n");
+}
+
 // ─── Tools ───
 export const todoWriteTool: ToolDefinition = {
   name: "todo_write",

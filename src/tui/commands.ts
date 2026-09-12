@@ -31,6 +31,7 @@ export const COMMAND_LIST: Array<{ name: string; usage: string; desc: string }> 
   { name: "/models", usage: "/models [filter|number|name]", desc: "Live provider model list + select" },
   { name: "/providers", usage: "/providers [use|login ...]", desc: "Manage connected multi-providers" },
   { name: "/compact", usage: "/compact", desc: "Compact context now (auto past 80%)" },
+  { name: "/effort", usage: "/effort [low|medium|high]", desc: "Show/set thinking budget per session" },
   { name: "/login", usage: "/login <provider> <key>", desc: "Save API key to ~/sabana-code/ (global)" },
   { name: "/logout", usage: "/logout [provider]", desc: "View / remove stored credentials" },
   { name: "/context", usage: "/context", desc: "Show active model context usage" },

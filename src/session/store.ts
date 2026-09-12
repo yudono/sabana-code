@@ -24,6 +24,8 @@ export interface Session {
   projectId: string;
   /** Per-session terminal/file permission decisions (allow all/deny). New sessions start empty. */
   approvals: ApprovalState;
+  /** Effort preset name (controls maxTokens/maxSteps). Missing = medium. */
+  effort?: string;
   messages: ModelMessage[];
   filesModified: string[];
 }
@@ -113,6 +115,7 @@ export function loadSession(id: string): Session | null {
     const s = JSON.parse(readFileSync(join(dir(), match), "utf-8")) as Session;
     if (!s.projectId) s.projectId = projectIdFor(s.workspaceDir); // backfill old sessions
     if (!s.approvals) s.approvals = emptyApprovals(); // backfill: old approvals are not carried over
+    if (!s.effort) s.effort = "medium"; // backfill old sessions
     return s;
   } catch {
     return null;

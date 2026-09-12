@@ -85,6 +85,7 @@ export async function runSubAgent(
   task: string,
   workspaceDir: string,
   base: SubAgentBase,
+  onEvent?: (ev: { type: string }) => void,
 ): Promise<SubAgentResult> {
   const agent = new SingleAgent({
     model: profile.model || base.model,
@@ -99,7 +100,7 @@ export async function runSubAgent(
     rpm: base.rpm ?? 60,
     approvals: base.approvals,
     askPermission: base.askPermission,
-    onEvent: () => {},
+    onEvent: (ev) => onEvent?.(ev),
   });
   const system =
     SYSTEM_PROMPT +

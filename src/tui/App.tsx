@@ -24,8 +24,9 @@ import { bannerSegs, hasChatItems } from "./banner.js";
 import type { PermissionAsker, PermissionRequest, AskerVerdict } from "../utils/permissions.js";
 import { listAgents, loadAgent, runSubAgent } from "../subagents.js";
 import { listSkills, loadSkill } from "../skills.js";
-import { formatTodos, loadTodos } from "../todo.js";
+import { formatTodoList, loadTodos } from "../todo.js";
 import { createCheckpoint, listCheckpoints, pairPromptCheckpoints, rewindToCheckpoint } from "../checkpoint.js";
+import { EFFORT_LEVELS, EFFORT_PRESETS, parseEffort, type EffortLevel } from "../effort.js";
 import { contextUsage } from "../session/context.js";
 import { flog } from "../utils/filelog.js";
 import {
@@ -41,6 +42,8 @@ import { helpText, matchModelName, parseCommand, suggestCommands } from "./comma
 export type ChatItem =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "todo"; text: string }
   | {
       kind: "tool";
       id: string;
@@ -196,6 +199,28 @@ export function itemRowList(it: ChatItem, cols: number): ChatRow[] {
     case "assistant":
       for (const c of wrapText(it.text, w)) rows.push({ segs: [{ text: c }] });
       break;
+    case "todo": {
+      const chunks = wrapText(it.text, w);
+      chunks.forEach((c, i) => {
+        rows.push(
+          i === 0
+            ? { segs: [{ text: "☰ ", color: "cyan", bold: true }, { text: c.slice(2) }] }
+            : { segs: [{ text: c }] },
+        );
+      });
+      break;
+    }
+    case "thinking": {
+      const chunks = wrapText(`◉ ${it.text}`, w);
+      chunks.forEach((c, i) => {
+        rows.push(
+          i === 0
+            ? { segs: [{ text: "◉ ", dim: true }, { text: c.slice(2), dim: true }] }
+            : { segs: [{ text: c, dim: true }] },
+        );
+      });
+      break;
+    }
     case "tool": {
       const line = `${it.status === "running" ? "⏳" : it.status === "ok" ? "✓" : "✗"} ${it.summary}${it.detail ? ` · ${it.detail}` : ""}`;
       const paint = (t: string): HlSeg =>
@@ -397,13 +422,15 @@ function makeAgent(
   asker: PermissionAsker,
 ): SingleAgent {
   const creds = resolveCredentials(session.provider);
+  const preset = EFFORT_PRESETS[(session.effort as EffortLevel) || "medium"] || EFFORT_PRESETS.medium;
   return new SingleAgent({
     model: session.model,
     provider: session.provider,
     apiKey: creds.apiKey,
     baseUrl: creds.baseUrl,
-    maxTokens: 8_192,
-    maxSteps,
+    maxTokens: preset.maxTokens,
+    // Explicit effort overrides the CLI default; otherwise keep it.
+    maxSteps: session.effort ? preset.maxSteps : maxSteps,
     // Izin terminal/file ditanya inline (asker) + disimpan per session.
     autoApprove: false,
     approvals: session.approvals,
@@ -451,6 +478,7 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
   const [cutoff, setCutoff] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [spin, setSpin] = useState(0);
+  const [stepInfo, setStepInfo] = useState<string | null>(null);
 
   const sessionRef = useRef(session);
   const itemsRef = useRef(items);
@@ -474,6 +502,23 @@ export function App({ initialSession, workspaceDir, maxSteps, initialPrompt }: T
     setStream("");
     if (t.trim()) push({ kind: "assistant", text: t });
   }, [push]);
+
+  // Model thinking (reasoning events): accumulated silently, flushed as dim
+  // blocks merged into the last thinking item (no feed flooding).
+  const reasoningRef = useRef("");
+  const flushThinking = useCallback(() => {
+    const t = reasoningRef.current.trim();
+    reasoningRef.current = "";
+    if (!t) return;
+    const capped = t.length > 2000 ? t.slice(0, 2000) + "\n…(truncated)" : t;
+    setItems((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.kind === "thinking") {
+        return [...prev.slice(0, -1), { ...last, text: `${last.text}\n${capped}` }];
+      }
+      return [...prev, { kind: "thinking", text: capped }];
+    });
+  }, []);
 
   const persist = useCallback((s: Session) => {
     sessionRef.current = s;
@@ -590,12 +635,21 @@ interface PreviewState {
           streamRef.current += ev.delta;
           setStream(streamRef.current);
           break;
+        case "reasoning":
+          reasoningRef.current += ev.delta;
+          break;
+        case "reasoning_end":
+          flushThinking();
+          break;
         case "text_end":
         case "step":
+          if (ev.type === "step") setStepInfo(`${ev.step}/${ev.maxSteps}`);
           flushStream();
+          flushThinking();
           break;
         case "tool_start":
           flushStream();
+          flushThinking();
           push({
             kind: "tool",
             id: ev.call.id,
@@ -607,6 +661,7 @@ interface PreviewState {
           break;
         case "tool_end":
           flushStream();
+          flushThinking();
           setItems((prev) =>
             prev.map((it) =>
               it.kind === "tool" && it.id === ev.call.id
@@ -619,13 +674,36 @@ interface PreviewState {
                 : it,
             ),
           );
+          // todo_write → live numbered panel (replaces the previous one).
+          if (ev.call.name === "todo_write" && ev.status === "success") {
+            const todos = (ev.output as { todos?: Array<{ content?: unknown; status?: unknown }> } | null)?.todos;
+            if (Array.isArray(todos)) {
+              const items = todos
+                .filter((t) => t && typeof t.content === "string")
+                .map((t) => ({
+                  content: (t.content as string).slice(0, 300),
+                  status: (["pending", "in_progress", "completed"] as string[]).includes(t.status as string)
+                    ? (t.status as "pending" | "in_progress" | "completed")
+                    : ("pending" as const),
+                  priority: "medium" as const,
+                }));
+              const text = formatTodoList(items.map((t, i) => ({ id: `t${i + 1}`, ...t })));
+              setItems((prev) => {
+                const idx = prev.map((it, i) => (it.kind === "todo" ? i : -1)).filter((i) => i >= 0).pop();
+                if (idx === undefined) return [...prev, { kind: "todo", text } as ChatItem];
+                return [...prev.slice(0, idx), { kind: "todo", text } as ChatItem, ...prev.slice(idx + 1)];
+              });
+            }
+          }
           break;
         case "warn":
           flushStream();
+          flushThinking();
           push({ kind: "info", tone: "yellow", text: ev.message });
           break;
         case "error":
           flushStream();
+          flushThinking();
           push({ kind: "info", tone: "red", text: ev.message });
           break;
         case "trimmed":
@@ -636,10 +714,12 @@ interface PreviewState {
           break;
         case "done":
           flushStream();
+          flushThinking();
+          setStepInfo(null);
           break;
       }
     },
-    [flushStream, push],
+    [flushStream, flushThinking, push],
   );
 
   /**
@@ -742,6 +822,7 @@ interface PreviewState {
       } finally {
         runningRef.current = false;
         setRunning(false);
+        setStepInfo(null);
       }
     },
     [flushStream, persist, push, workspaceDir],
@@ -879,6 +960,8 @@ interface PreviewState {
           try {
             const sess = sessionRef.current;
             const creds = resolveCredentials(sess.provider);
+            let subTools = 0;
+            const t0 = Date.now();
             const sub = await runSubAgent(profile, task, workspaceDir, {
               provider: sess.provider,
               apiKey: creds.apiKey,
@@ -888,8 +971,14 @@ interface PreviewState {
               maxSteps: Math.min(20, maxSteps),
               approvals: sess.approvals,
               askPermission: asker,
+            }, (ev) => {
+              if (ev.type === "tool_start") subTools++;
             });
-            push({ kind: "assistant", text: sub.text.trim() || "(sub-agent returned no text)" });
+            const secs = ((Date.now() - t0) / 1000).toFixed(1);
+            push({
+              kind: "assistant",
+              text: `⬣ ${profile.name} • ${sub.steps} steps • ${subTools} tools • ${secs}s • ${sub.files.length} files\n${sub.text.trim() || "(sub-agent returned no text)"}`,
+            });
             // Merge new sub-agent approvals into the session + main engine.
             agentRef.current?.mergeApprovals(sub.approvals);
             persist({
@@ -1051,12 +1140,7 @@ interface PreviewState {
         }
         case "todo": {
           const list = loadTodos(workspaceDir);
-          const done = list.items.filter((t) => t.status === "completed").length;
-          push({
-            kind: "info",
-            tone: "dim",
-            text: `Todos (${done}/${list.items.length} done):\n${formatTodos(list.items)}`,
-          });
+          push({ kind: "todo", text: formatTodoList(list.items) });
           break;
         }
         case "mcp": {
@@ -1161,6 +1245,27 @@ interface PreviewState {
             runningRef.current = false;
             setRunning(false);
           }
+          break;
+        }
+        case "effort": {
+          const cur = ((sess.effort as EffortLevel) || "medium") as EffortLevel;
+          const want = args[0] ? parseEffort(args[0]) : null;
+          if (!args[0] || !want) {
+            push({
+              kind: "info",
+              tone: "dim",
+              text: [
+                `Effort: ${cur} (maxTokens ${EFFORT_PRESETS[cur].maxTokens}, maxSteps ${EFFORT_PRESETS[cur].maxSteps})`,
+                ...EFFORT_LEVELS.map((l) => `  ${l} — ${EFFORT_PRESETS[l].desc} (${EFFORT_PRESETS[l].maxTokens} tok / ${EFFORT_PRESETS[l].maxSteps} steps)`),
+                "Usage: /effort <low|medium|high> (applies to new turns)",
+              ].join("\n"),
+            });
+            break;
+          }
+          persist({ ...sess, effort: want });
+          agentRef.current = makeAgent(sessionRef.current, maxSteps, handleEvent, asker);
+          const p = EFFORT_PRESETS[want];
+          push({ kind: "info", tone: "green", text: `Effort → ${want} (${p.desc}, ${p.maxTokens} tok / ${p.maxSteps} steps).` });
           break;
         }
         case "context": {
@@ -1512,7 +1617,7 @@ interface PreviewState {
       {!preview && (
         <Box marginTop={1} borderStyle="single" borderColor={approval ? "yellow" : running ? "yellow" : "gray"} paddingX={1}>
           <Text color={approval ? "yellow" : running ? "yellow" : "green"}>
-            {approval ? "⚡ " : running ? SPIN[spin] + " " : "❯ "}
+            {approval ? "⚡ " : running ? `${SPIN[spin]}${stepInfo ? ` step ${stepInfo} ` : " "}` : "❯ "}
           </Text>
           <TextInput
             value={input}
@@ -1552,7 +1657,7 @@ interface PreviewState {
       <Box marginTop={0}>
         <Text dimColor>
           ctx ~{usage.tokens.toLocaleString()}/{usage.window.toLocaleString()} ({usage.pct.toFixed(0)}%)
-          {"  "}• {session.filesModified.length} files • /help
+          {"  "}• {session.filesModified.length} files • {session.effort || "medium"} • /help
           {scroll > 0 ? ` • ↑${scroll} (PgDn/wheel down)` : ""}
         </Text>
       </Box>
