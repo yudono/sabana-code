@@ -1465,9 +1465,11 @@ interface PreviewState {
 
   // Smooth line-based viewport: every chat row scrolls (no page-break jumps).
   // scrollOffset 0 = tail (newest) pinned bottom; clamped so view never empties.
-  const CHROME_ROWS = 4 + 1 + 3 + 1; // header + margin + input + status
-  const approvalRows = approval ? 5 : 0;
-  const dropdownRows = dropdown ? 8 + ddVisible.length : 0;
+  const CHROME_ROWS = 3 + 1 + 3 + 1; // header text + feed margin + input box + status
+  const approvalRows = approval ? 3 : 0;
+  const dropdownRows = dropdown
+    ? 4 + ddVisible.length + (ddOffset > 0 ? 1 : 0) + (ddOffset + ddVisible.length < dropdown.options.length ? 1 : 0)
+    : 0;
   const avail = Math.max(5, rows - CHROME_ROWS - approvalRows - dropdownRows - 2);
   const feed: ChatItem[] = stream ? [...visible, { kind: "assistant", text: `${stream}▍` }] : visible;
   const allRows: ChatRow[] = feed.flatMap((it) => itemRowList(it, cols));
@@ -1490,14 +1492,14 @@ interface PreviewState {
   openPreviewRef.current = openPreviewById;
   openRevertRef.current = openRevertMenu;
 
-  // ── Fullscreen preview panel: border(2) + title(1) + footer(1).
-  const previewAvail = preview ? Math.max(5, rows - 4 - 1 - 4 - 1 - (approval ? 5 : 0)) : 0;
+  // ── Fullscreen preview panel (title + footer, no border: only input is boxed).
+  const previewAvail = preview ? Math.max(5, rows - 9 - (approval ? 3 : 0)) : 0;
   let pvShown: HlSeg[][] = [];
   let pvStart = 0;
   let pvTotalRows = 0;
   let pvScrollClamped = 0;
   if (preview) {
-    const w = Math.max(20, cols - 6);
+    const w = Math.max(20, cols - 4);
     const hs = preview.plain.map((l) => Math.max(1, Math.ceil(cellWidth(l) / w)));
     pvTotalRows = hs.reduce((a, b) => a + b, 0);
     const maxP = Math.max(0, pvTotalRows - previewAvail);
@@ -1527,7 +1529,7 @@ interface PreviewState {
     <Box flexDirection="column" width={cols} height={rows} paddingX={1}>
       <Box flexDirection="column" flexGrow={1} marginTop={1}>
         {preview ? (
-          <Box key="__preview" borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column" flexGrow={1}>
+          <Box key="__preview" flexDirection="column" flexGrow={1}>
             <Box marginBottom={1}>
               <Text bold>{truncate(preview.title, cols)}</Text>
             </Box>
@@ -1589,7 +1591,7 @@ interface PreviewState {
       </Box>
 
       {dropdown && !preview && (
-        <Box marginTop={1} marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} paddingY={1} width={Math.min(cols - 4, 60)} flexDirection="column">
+        <Box marginTop={1} marginBottom={1} width={Math.min(cols - 4, 60)} flexDirection="column">
           <Box marginBottom={1}>
             <Text>
               <Text bold color="cyan">{dropdown.title}</Text>
@@ -1631,26 +1633,22 @@ interface PreviewState {
         </Box>
       )}
 
-      <Box marginTop={1} borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
-        <Box>
-          <Text>
-            <Text bold color="cyan">sabana-code</Text>
-            <Text bold>  {projectName}</Text>
-            <Text dimColor>  {session.id.slice(0, 8)} • {session.model}/{session.provider}</Text>
-          </Text>
-        </Box>
-        <Box><Text dimColor>{workspaceDir}</Text></Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text>
+          <Text bold color="cyan">sabana-code</Text>
+          <Text bold>  {projectName}</Text>
+          <Text dimColor>  {session.id.slice(0, 8)} • {session.model}/{session.provider}</Text>
+        </Text>
+        <Text dimColor>{workspaceDir}</Text>
       </Box>
 
       {approval && (
-        <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-          <Box>
+        <Box marginTop={1} flexDirection="column">
+          <Text>
             <Text bold color="yellow">Terminal permission </Text>
             <Text>{approval.label}</Text>
-          </Box>
-          <Box>
-            <Text dimColor>[y] once   [a] {approval.scope}   [n] deny</Text>
-          </Box>
+          </Text>
+          <Text dimColor>[y] once   [a] {approval.scope}   [n] deny</Text>
         </Box>
       )}
 
@@ -1664,13 +1662,13 @@ interface PreviewState {
 
       {isRawModeSupported && <KeyHandler onKey={(inp, key) => {
         if (process.env.SABANA_DEBUG_INPUT) flog("input", `inp=${JSON.stringify(inp)} key=${JSON.stringify(key)}`);
-        // Escape artifacts from complete mouse sequences (klik/wheel ditangani
-        // parser sendiri). Jendela sempit + berbasis sequence (bukan chunk)
+        // Escape artifacts from complete mouse sequences (click/wheel handled by
+        // the parser itself). Narrow sequence-based window (not chunk-based)
         // so real Esc is never eaten.
         if (key.escape && Date.now() - lastSeqAt.current < 150) return;
-        // Pratinjau fullscreen: Esc/Ctrl+C/q menutup; panah scroll; lainnya abaikan.
-        // (pakai state `preview` langsung — closure ini dibuat ulang tiap render,
-        // jadi selalu segar; ref terpisah rawan lupa di-sync dan bikin Esc mati.)
+        // Fullscreen preview: Esc/Ctrl+C/q closes; arrows scroll; ignore the rest.
+        // (uses `preview` state directly — this closure is recreated every render,
+        // so always fresh; a separate ref risks forgotten syncs and kills Esc.)
         if (preview) {
           if ((inp === "q" || inp === "Q") && !approvalActive.current) {
             closePreview();
